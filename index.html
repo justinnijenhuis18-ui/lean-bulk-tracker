@@ -59,9 +59,15 @@ const SEED_GOALS = [
   { id:'gym',        area:'fitness',   name:'Gym',           icon:'🏋️', cadence:'weekly',  metric:'count', target:6,     unit:'x', auto:'gym' },
   { id:'hardlopen',  area:'fitness',   name:'Hardlopen',     icon:'🏃', cadence:'weekly',  metric:'count', target:3,     unit:'x' },
   { id:'slaap',      area:'fitness',   name:'Slaap',         icon:'😴', cadence:'daily',   metric:'value', target:7.5,   unit:'u' },
+  { id:'water',      area:'fitness',   name:'Water',         icon:'💧', cadence:'daily',   metric:'value', target:3,     unit:'L' },
   { id:'meditatie',  area:'mentaal',   name:'Meditatie 15m', icon:'🧘', cadence:'daily',   metric:'count', target:1,     unit:'' },
   { id:'zonnen',     area:'mentaal',   name:'Zonnen',        icon:'☀️', cadence:'weekly',  metric:'count', target:1,     unit:'x' },
 ];
+// goals that must always exist, even for users with older saved data
+const REQUIRED_GOAL_IDS = ['water'];
+// clean-habit sub-items for the "Zonder slechte gewoontes" ring (3rd label kept neutral)
+const CLEAN_ITEMS = [['smoke','🚭','Niet gerookt'],['energy','🥫','Geen energydrank'],['focus','✨','Clean gebleven']];
+const FREE_DAYS_PER_WEEK = 1;
 
 /* =========================================================================
    DATE HELPERS
@@ -243,12 +249,13 @@ function loadState(){
 }
 function mergeState(def, saved){
   const s = { ...def, ...saved };
-  // ensure new keys always exist even if loading an older payload
   s.goals   = (saved && saved.goals && saved.goals.length) ? saved.goals : def.goals;
   s.dayLog  = saved.dayLog  || {};
   s.monthLog= saved.monthLog|| {};
   s.metrics = saved.metrics || {};
   s.profile = { ...def.profile, ...(saved.profile||{}) };
+  // inject any required goals that are missing from older payloads
+  REQUIRED_GOAL_IDS.forEach(id=>{ if(!s.goals.some(g=>g.id===id)){ const seed=SEED_GOALS.find(g=>g.id===id); if(seed) s.goals=[...s.goals, seed]; } });
   return s;
 }
 
@@ -295,6 +302,17 @@ function goalProgress(goal, state){
   return { value:0, target:goal.target, period:'' };
 }
 const goalColor = (goal) => goal.color || AREAS[goal.area]?.color || '#37c0ff';
+
+/* --- clean habits + lifestyle endboss --- */
+function isDayClean(state, date){ const c=(state.dayLog[date]||{}).clean; return !!(c && c.smoke && c.energy && c.focus); }
+function isFreeDay(state, date){ return !!(state.dayLog[date]||{}).freeDay; }
+function weekFreeCount(state, refDate){ const ws=startOfWeek(refDate||new Date()); let c=0; Object.entries(state.dayLog||{}).forEach(([d,o])=>{ if(o.freeDay && new Date(d+'T00:00:00')>=ws) c++; }); return c; }
+function cleanStreak(state){ let d=new Date(); if(!isDayClean(state,todayISO())) d.setDate(d.getDate()-1); let n=0; for(let i=0;i<1000;i++){ const iso=d.toISOString().slice(0,10); if(isDayClean(state,iso)){ n++; d.setDate(d.getDate()-1);} else break; } return n; }
+function dailyGoalsList(state){ return state.goals.filter(g=>g.cadence==='daily'); }
+function dailyGoalMetOn(goal, state, date){ const day=state.dayLog[date]||{}; if(goal.metric==='count') return !!day[goal.id]; return (Number(day[goal.id])||0) >= goal.target; }
+function isDayPerfect(state, date){ if(isFreeDay(state,date)) return false; const dg=dailyGoalsList(state); if(!dg.length) return false; if(!dg.every(g=>dailyGoalMetOn(g,state,date))) return false; return isDayClean(state,date); }
+function lifestyleStreak(state){ let d=new Date(); const t=todayISO(); if(!isDayPerfect(state,t) && !isFreeDay(state,t)) d.setDate(d.getDate()-1); let n=0; for(let i=0;i<1000;i++){ const iso=d.toISOString().slice(0,10); if(isDayPerfect(state,iso)){ n++; d.setDate(d.getDate()-1); } else if(isFreeDay(state,iso)){ d.setDate(d.getDate()-1); } else break; } return n; }
+function todayLifestyle(state){ const t=todayISO(); const dg=dailyGoalsList(state); const reqs=dg.map(g=>dailyGoalMetOn(g,state,t)).concat([isDayClean(state,t)]); const met=reqs.filter(Boolean).length; return { met, total:reqs.length, perfect:met===reqs.length && reqs.length>0, free:isFreeDay(state,t) }; }
 
 /* =========================================================================
    UI ATOMS
@@ -345,6 +363,41 @@ function Section({ title, tag, color, children }){
 }
 
 /* =========================================================================
+   LIFESTYLE ENDBOSS + CLEAN STREAK RINGS
+   ========================================================================= */
+function LifestyleRing({ state }){
+  const { met, total, perfect, free } = todayLifestyle(state);
+  const streak = lifestyleStreak(state);
+  const pct = free ? 1 : (total? met/total : 0);
+  const color = perfect ? '#34d399' : free ? '#64748b' : '#f59e0b';
+  const label = perfect ? '🔥 Perfecte dag' : free ? 'Vrije dag' : 'Lifestyle';
+  return (
+    <div className="flex-1 border rounded-2xl p-4 flex flex-col items-center" style={perfect?{background:'linear-gradient(160deg,rgba(52,211,153,.16),#141b27)',borderColor:'rgba(52,211,153,.4)',boxShadow:'0 0 0 1px rgba(52,211,153,.35),0 10px 30px -10px rgba(52,211,153,.5)'}:{background:'linear-gradient(160deg,#141b27,#0e131c)',borderColor:'#202a3a'}}>
+      <div className="font-display tracking-widest text-[10px] uppercase mb-2 text-center" style={{color}}>{label}</div>
+      <Ring pct={pct} size={96} stroke={9} color={color}>
+        <div className="font-display text-3xl font-900 leading-none">{streak}</div>
+        <div className="text-[8px] uppercase tracking-widest text-slate-400 font-display">dagen</div>
+      </Ring>
+      <div className="text-[11px] text-slate-400 mt-2">{free? 'streak beschermd' : `${met}/${total} vandaag`}</div>
+    </div>
+  );
+}
+function CleanRing({ state }){
+  const c=(state.dayLog[todayISO()]||{}).clean||{}; const met=[c.smoke,c.energy,c.focus].filter(Boolean).length;
+  const streak=cleanStreak(state); const full=met===3; const color=full?'#34d399':'#a78bfa';
+  return (
+    <div className="flex-1 bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-4 flex flex-col items-center">
+      <div className="font-display tracking-widest text-[10px] uppercase mb-2 text-center leading-tight" style={{color}}>Zonder slechte<br/>gewoontes</div>
+      <Ring pct={met/3} size={96} stroke={9} color={color}>
+        <div className="font-display text-3xl font-900 leading-none">{streak}</div>
+        <div className="text-[8px] uppercase tracking-widest text-slate-400 font-display">dagen</div>
+      </Ring>
+      <div className="text-[11px] text-slate-400 mt-2">{met}/3 vandaag</div>
+    </div>
+  );
+}
+
+/* =========================================================================
    DOELENDASHBOARD (home)
    ========================================================================= */
 function GoalsScreen({ state, onAddGoal, onDeleteGoal, goTo }){
@@ -372,6 +425,12 @@ function GoalsScreen({ state, onAddGoal, onDeleteGoal, goTo }){
           <h1 className="font-display text-3xl font-900 leading-tight mt-0.5">DOELEN&shy;DASHBOARD</h1>
           <button onClick={()=>goTo('vandaag')} className="mt-2 inline-flex items-center gap-1 text-[11px] font-display uppercase tracking-widest text-slate-900 bg-electric2 rounded-lg px-3 py-1.5 font-800 active:scale-95">Naar vandaag →</button>
         </div>
+      </div>
+
+      {/* endboss + clean streak */}
+      <div className="flex gap-3">
+        <LifestyleRing state={state} />
+        <CleanRing state={state} />
       </div>
 
       {/* areas */}
@@ -469,14 +528,13 @@ function GoalSheet({ area, onClose, onSave }){
 /* =========================================================================
    VANDAAG
    ========================================================================= */
-function TodayScreen({ state, setDayValue, toggleDay, addMonth, goTo }){
+function TodayScreen({ state, setDayValue, toggleDay, addMonth, toggleClean, toggleFreeDay, goTo }){
   const today = todayISO();
   const dayLog = state.dayLog[today] || {};
   const dailyGoals = state.goals.filter(g=>g.cadence==='daily');
   const weeklyGoals = state.goals.filter(g=>g.cadence==='weekly');
   const monthlyGoals = state.goals.filter(g=>g.cadence==='monthly');
 
-  // consistency = avg completion of today's daily goals (capped at 1 each)
   const consistency = useMemo(()=>{
     if (!dailyGoals.length) return 0;
     const ps = dailyGoals.map(g=>{ const {value,target}=goalProgress(g,state); return Math.min(1, target? value/target:0); });
@@ -499,6 +557,39 @@ function TodayScreen({ state, setDayValue, toggleDay, addMonth, goTo }){
           <div className="text-sm text-slate-400 mt-1">{doneCount}/{dailyGoals.length} dagdoelen gehaald</div>
         </div>
       </div>
+
+      {/* zonder slechte gewoontes */}
+      <div>
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="font-display tracking-widest text-slate-400 text-xs uppercase">Zonder slechte gewoontes</div>
+          <div className="text-[10px] font-display uppercase tracking-widest text-violet-300">🔥 {cleanStreak(state)} dagen</div>
+        </div>
+        <div className="space-y-2">
+          {CLEAN_ITEMS.map(([k,icon,label])=>{
+            const on=!!((state.dayLog[today]||{}).clean||{})[k];
+            return (
+              <button key={k} onClick={()=>toggleClean(k)} className={`w-full flex items-center gap-3 rounded-2xl p-3.5 border transition active:scale-[.99] text-left ${on?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                <span className="text-2xl">{icon}</span>
+                <div className="flex-1 min-w-0 font-700">{label}</div>
+                <Check on={on} onClick={()=>toggleClean(k)} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* vrije dag joker */}
+      {(()=>{ const used=weekFreeCount(state); const isFree=isFreeDay(state,today); const canUse=isFree||used<FREE_DAYS_PER_WEEK; return (
+        <button onClick={()=>{ if(canUse) toggleFreeDay(); }} disabled={!canUse}
+          className={`w-full flex items-center gap-3 rounded-2xl p-3.5 border transition text-left ${isFree?'bg-slate-500/15 border-slate-400/40':canUse?'bg-card border-line active:scale-[.99]':'bg-card border-line opacity-50'}`}>
+          <span className="text-2xl">🎟️</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-700">{isFree?'Vandaag is een vrije dag':'Vrije dag inzetten'}</div>
+            <div className="text-[11px] text-slate-500">{isFree?'je Lifestyle-streak loopt door zonder dat dagdoelen tellen':`joker · ${Math.max(0,FREE_DAYS_PER_WEEK-used)} van ${FREE_DAYS_PER_WEEK} over deze week`}</div>
+          </div>
+          <span className={`text-[10px] font-display uppercase tracking-widest rounded-lg px-3 py-2 ${isFree?'bg-slate-400 text-slate-900':'border border-line text-slate-300'}`}>{isFree?'aan':'inzetten'}</span>
+        </button>
+      ); })()}
 
       {/* daily actions */}
       {dailyGoals.length>0 && <div>
@@ -593,6 +684,7 @@ function TodayScreen({ state, setDayValue, toggleDay, addMonth, goTo }){
   );
 }
 function actionText(g){
+  if (g.id==='water') return '3 liter water drinken';
   if (g.id==='stappen') return `${nfmt(g.target)} stappen lopen`;
   if (g.id==='slaap') return `${g.target} uur slapen`;
   if (g.id==='meditatie') return 'Mediteren · 15 min';
@@ -627,20 +719,17 @@ function BodyScreen({ state, saveMetric, setMood }){
     <div className="space-y-5">
       <h1 className="font-display text-3xl font-900">LICHAAM</h1>
 
-      {/* hero stats */}
       <div className="flex gap-3">
         <StatBox label="Gewicht" value={latestWeight?`${latestWeight}`:'—'} sub="kg · laatste" accent="#37c0ff" />
         <StatBox label="Vet %" value={bf!=null?`${bf}`:'—'} sub={bf!=null?'geschat (tape)':'vul taille+hals'} accent="#a78bfa" />
         <StatBox label="Doel" value={state.profile.goal} sub="kg" />
       </div>
 
-      {/* weight trend */}
       {wpts.length>=2 && <div className="bg-card border border-line rounded-2xl p-4">
         <div className="font-display text-lg font-700 mb-2">Gewicht trend</div>
         <WeightSpark pts={wpts} />
       </div>}
 
-      {/* today input */}
       <div>
         <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Meting vandaag</div>
         <div className="grid grid-cols-2 gap-3">
@@ -654,7 +743,6 @@ function BodyScreen({ state, saveMetric, setMood }){
         <div className="text-[11px] text-slate-500 mt-2 leading-relaxed">Taille + hals + je lengte (191 cm) → automatische vet%-schatting via de Navy-methode. Geen weegschaal nodig.</div>
       </div>
 
-      {/* mood + energy */}
       <div>
         <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Hoe voel je je?</div>
         <div className="space-y-2.5">
@@ -1006,6 +1094,8 @@ function App(){
   /* day log */
   const setDayValue=(goalId,val)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day[goalId]=val; dl[d]=day; return {...s,dayLog:dl}; });
   const toggleDay=(goalId)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day[goalId]=!day[goalId]; dl[d]=day; return {...s,dayLog:dl}; });
+  const toggleClean=(key)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; const clean={...(day.clean||{})}; clean[key]=!clean[key]; day.clean=clean; dl[d]=day; return {...s,dayLog:dl}; });
+  const toggleFreeDay=()=>setState(s=>{ const d=todayISO(); const cur=isFreeDay(s,d); if(!cur && weekFreeCount(s)>=FREE_DAYS_PER_WEEK) return s; const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day.freeDay=!cur; dl[d]=day; return {...s,dayLog:dl}; });
   /* month log */
   const addMonth=(goalId,amount)=>setState(s=>{ const mk=monthKey(todayISO()); const ml={...(s.monthLog||{})}; const mo={...(ml[mk]||{})}; mo[goalId]=(Number(mo[goalId])||0)+amount; ml[mk]=mo; return {...s,monthLog:ml}; });
   /* metrics */
@@ -1026,7 +1116,7 @@ function App(){
     <div className="min-h-screen text-slate-100 max-w-xl mx-auto px-4 pt-5 pb-28">
       <div className="fixed top-2 right-2 z-50 text-[9px] font-display uppercase tracking-widest px-2 py-1 rounded-full border" style={syncStyle}>{sync==='synced'?'☁ synced':sync==='offline'?'⚠ offline':'… syncing'}</div>
       {tab==='doelen' && <GoalsScreen state={state} onAddGoal={addGoal} onDeleteGoal={deleteGoal} goTo={setTab}/>}
-      {tab==='vandaag' && <TodayScreen state={state} setDayValue={setDayValue} toggleDay={toggleDay} addMonth={addMonth} goTo={setTab}/>}
+      {tab==='vandaag' && <TodayScreen state={state} setDayValue={setDayValue} toggleDay={toggleDay} addMonth={addMonth} toggleClean={toggleClean} toggleFreeDay={toggleFreeDay} goTo={setTab}/>}
       {tab==='lichaam' && <BodyScreen state={state} saveMetric={saveMetric} setMood={setMood}/>}
       {tab==='fitness' && <FitnessModule state={state} setState={setState} active={active} setActive={setActive} startWorkout={startWorkout} finishWorkout={finishWorkout} discardWorkout={discardWorkout} toggleMeal={toggleMeal} toggleGrocery={toggleGrocery} setGroceryQty={setGroceryQty} resetGrocery={resetGrocery}/>}
       <Nav tab={tab} setTab={setTab} activeBadge={!!active}/>
