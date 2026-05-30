@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Justin · Lean Bulk Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          display: ['"Barlow Condensed"', 'sans-serif'],
+          body: ['Barlow', 'sans-serif'],
+        },
+        colors: {
+          ink: '#070a0f',
+          panel: '#0e131c',
+          card: '#141b27',
+          line: '#202a3a',
+          electric: '#1d9bf0',
+          electric2: '#37c0ff',
+        },
+      },
+    },
+  };
+</script>
+<style>
+  html, body { background:#070a0f; }
+  body { font-family:'Barlow', sans-serif; -webkit-tap-highlight-color: transparent; }
+  .font-display { font-family:'Barlow Condensed', sans-serif; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; }
+  ::-webkit-scrollbar { width:0; height:0; }
+  .glow { box-shadow: 0 0 0 1px rgba(29,155,240,.25), 0 8px 30px -10px rgba(29,155,240,.45); }
+  .sheet-in { animation: sheetIn .25s cubic-bezier(.2,.8,.2,1); }
+  @keyframes sheetIn { from { transform: translateY(100%);} to { transform: translateY(0);} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ----------------------------- Plan data ----------------------------- */
+const MUSCLE_COLORS = {
+  Chest:    '#1d9bf0',
+  Back:     '#37c0ff',
+  Shoulders:'#22d3ee',
+  Arms:     '#818cf8',
+  Legs:     '#34d399',
+  Glutes:   '#f472b6',
+  Calves:   '#facc15',
+  Core:     '#fb923c',
+};
+
+const PLAN = [
+  { id:'pushA', label:'Day 1', name:'Push A · Chest', exercises:[
+    { name:'DB Bench Press', muscle:'Chest', sets:4, reps:'6–10' },
+    { name:'DB Incline Press', muscle:'Chest', sets:3, reps:'8–12' },
+    { name:'Cable Fly', muscle:'Chest', sets:3, reps:'12–15' },
+    { name:'Cable Triceps Pushdown', muscle:'Arms', sets:3, reps:'10–15' },
+    { name:'Overhead DB Triceps Ext', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'pullA', label:'Day 2', name:'Pull A · Back Width', exercises:[
+    { name:'Pull-ups', muscle:'Back', sets:4, reps:'6–10' },
+    { name:'One-arm DB Row', muscle:'Back', sets:4, reps:'8–12' },
+    { name:'Cable Lat Pulldown', muscle:'Back', sets:3, reps:'10–12' },
+    { name:'Cable Face Pull', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'DB Hammer Curl', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'legsA', label:'Day 3', name:'Legs A · Quad Focus', exercises:[
+    { name:'DB Goblet Squat', muscle:'Legs', sets:4, reps:'8–12' },
+    { name:'DB Bulgarian Split Squat', muscle:'Legs', sets:3, reps:'8–12' },
+    { name:'DB Romanian Deadlift', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'DB Walking Lunge', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'Standing DB Calf Raise', muscle:'Calves', sets:4, reps:'15–20' },
+  ]},
+  { id:'pushB', label:'Day 4', name:'Push B · Shoulders', exercises:[
+    { name:'Seated DB Shoulder Press', muscle:'Shoulders', sets:4, reps:'6–10' },
+    { name:'DB Bench Press', muscle:'Chest', sets:3, reps:'8–12' },
+    { name:'DB Lateral Raise', muscle:'Shoulders', sets:4, reps:'12–20' },
+    { name:'Cable Lateral Raise', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'Cable Triceps Pushdown', muscle:'Arms', sets:3, reps:'12–15' },
+  ]},
+  { id:'pullB', label:'Day 5', name:'Pull B · Back Thickness', exercises:[
+    { name:'DB Bent-over Row', muscle:'Back', sets:4, reps:'8–12' },
+    { name:'Chin-ups', muscle:'Back', sets:3, reps:'6–10' },
+    { name:'Cable Seated Row', muscle:'Back', sets:3, reps:'10–12' },
+    { name:'Cable Face Pull', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'DB Incline Curl', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'legsB', label:'Day 6', name:'Legs B · Posterior Chain', exercises:[
+    { name:'DB Romanian Deadlift', muscle:'Legs', sets:4, reps:'8–12' },
+    { name:'Front-foot-elevated Split Squat', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'DB Hip Thrust', muscle:'Glutes', sets:3, reps:'12–15' },
+    { name:'Cable Pull-through', muscle:'Glutes', sets:3, reps:'15' },
+    { name:'Seated Calf Raise', muscle:'Calves', sets:4, reps:'15–20' },
+  ]},
+];
+
+const EXERCISE_LIBRARY = (() => {
+  const m = {};
+  PLAN.forEach(d => d.exercises.forEach(e => { m[e.name] = e.muscle; }));
+  // a few extras for the picker
+  Object.assign(m, {
+    'Push-up':'Chest', 'DB Pullover':'Back', 'DB Shrug':'Back',
+    'DB Concentration Curl':'Arms', 'Plank':'Core', 'Hanging Leg Raise':'Core',
+    'DB Step-up':'Legs', 'DB Reverse Fly':'Shoulders',
+  });
+  return Object.keys(m).sort().map(name => ({ name, muscle:m[name] }));
+})();
+
+/* ----------------------------- Meal plan ----------------------------- */
+const NUTRI = { kcal:3350, protein:190, carbs:470, fat:80, surplus:300 };
+
+const MEALS = [
+  { day:'Mon', focus:'Push A', meals:[
+    { slot:'Breakfast', name:'Skyr & oats power bowl', desc:'100g oats · 300g skyr · banana · 20g peanut butter · honey', kcal:810, p:52 },
+    { slot:'Lunch', name:'Double chicken wrap', desc:'2 wholegrain wraps · 150g chicken · salad · light mayo · apple', kcal:760, p:50 },
+    { slot:'Snack', name:'Whey shake + almonds', desc:'1 scoop whey · 300ml milk · 30g almonds', kcal:470, p:40 },
+    { slot:'Dinner', name:'Beef bolognese', desc:'180g 5% mince · 110g (dry) pasta · tomato & veg sauce', kcal:1120, p:56 },
+  ]},
+  { day:'Tue', focus:'Pull A', meals:[
+    { slot:'Breakfast', name:'Egg scramble on toast', desc:'4 eggs · 2 wholegrain toast · 150g skyr on the side', kcal:790, p:50 },
+    { slot:'Lunch', name:'Tuna pasta salad', desc:'2 tins tuna · 100g (dry) pasta · sweetcorn · light mayo', kcal:820, p:55 },
+    { slot:'Snack', name:'Cottage cheese & rice cakes', desc:'250g cottage cheese · 3 rice cakes · honey', kcal:410, p:34 },
+    { slot:'Dinner', name:'Chicken & rice bowl', desc:'200g chicken thigh · 100g (dry) rice · stir-fry veg · soy', kcal:1140, p:62 },
+  ]},
+  { day:'Wed', focus:'Legs A', meals:[
+    { slot:'Breakfast', name:'Overnight oats', desc:'100g oats · 300ml milk · 1 scoop whey · banana · berries', kcal:800, p:48 },
+    { slot:'Lunch', name:'Ham & cheese sandwiches', desc:'2 wholegrain sandwiches · Greek yogurt · fruit', kcal:780, p:48 },
+    { slot:'Snack', name:'PB toast + quark', desc:'Peanut butter on wholegrain toast · 300g quark', kcal:540, p:41 },
+    { slot:'Dinner', name:'Salmon, potatoes & broccoli', desc:'150g salmon · 350g potatoes · broccoli · olive oil', kcal:1150, p:52 },
+  ]},
+  { day:'Thu', focus:'Push B', meals:[
+    { slot:'Breakfast', name:'Skyr & oats power bowl', desc:'100g oats · 300g skyr · banana · 20g peanut butter · honey', kcal:810, p:52 },
+    { slot:'Lunch', name:'Chicken & rice prep box', desc:'150g chicken · 100g (dry) rice · roasted veg', kcal:720, p:48 },
+    { slot:'Snack', name:'Whey shake + peanuts', desc:'1 scoop whey · banana · 30g peanuts', kcal:450, p:38 },
+    { slot:'Dinner', name:'Lean beef burgers', desc:'2 5% beef patties · wholegrain buns · sweet-potato wedges · salad', kcal:1180, p:58 },
+  ]},
+  { day:'Fri', focus:'Pull B', meals:[
+    { slot:'Breakfast', name:'Cheese omelette', desc:'4 eggs · 30g cheese · 2 wholegrain toast', kcal:760, p:44 },
+    { slot:'Lunch', name:'Tuna & egg jacket potato', desc:'large potato · 1 tin tuna · 2 eggs · light mayo · salad', kcal:740, p:48 },
+    { slot:'Snack', name:'Greek yogurt & granola', desc:'300g Greek yogurt · granola · honey', kcal:460, p:32 },
+    { slot:'Dinner', name:'Chicken pasta', desc:'180g chicken · 110g (dry) pasta · tomato sauce · veg', kcal:1180, p:70 },
+  ]},
+  { day:'Sat', focus:'Legs B', meals:[
+    { slot:'Breakfast', name:'Protein pancakes', desc:'100g oats · 1 scoop whey · 2 eggs · banana · yogurt topping', kcal:820, p:55 },
+    { slot:'Lunch', name:'Beef burrito bowl', desc:'150g 5% mince · 100g (dry) rice · beans · salsa · cheese', kcal:880, p:52 },
+    { slot:'Snack', name:'Cottage cheese & nuts', desc:'250g cottage cheese · fruit · 20g nuts', kcal:430, p:32 },
+    { slot:'Dinner', name:'Roast chicken & potatoes', desc:'250g chicken thigh · 300g potatoes · roasted veg', kcal:1100, p:60 },
+  ]},
+  { day:'Sun', focus:'Rest', meals:[
+    { slot:'Breakfast', name:'Big skyr bowl', desc:'300g skyr · 80g granola · banana · berries · honey', kcal:760, p:44 },
+    { slot:'Lunch', name:'Omelette, toast & beans', desc:'4 eggs · 2 wholegrain toast · baked beans', kcal:760, p:42 },
+    { slot:'Snack', name:'Whey shake + almonds', desc:'1 scoop whey · 300ml milk · 30g almonds', kcal:510, p:41 },
+    { slot:'Dinner', name:'Salmon traybake', desc:'150g salmon · 300g potatoes · veg · 150g skyr dessert', kcal:1150, p:55 },
+  ]},
+];
+
+const GROCERIES = 'Oats · skyr/quark · eggs · milk · whey · chicken breast & thigh · 5% beef mince · salmon ×2 · tinned tuna ×6 · pasta · rice · potatoes & sweet potato · wholegrain bread & wraps · peanut butter · cottage cheese · Greek yogurt · cheese · beans · sweetcorn · salsa · fresh & frozen veg · bananas · apples · berries · almonds/peanuts · granola · honey · light mayo · olive oil';
+
+const SLOT_META = {
+  Breakfast:{ icon:'🌅', color:'#facc15' },
+  Lunch:    { icon:'🥪', color:'#34d399' },
+  Snack:    { icon:'🥤', color:'#37c0ff' },
+  Dinner:   { icon:'🍽️', color:'#818cf8' },
+};
+
+// training-focus colour coding (by muscle emphasis)
+const FOCUS_COLOR = {
+  'Push A':'#1d9bf0', 'Push B':'#22d3ee',
+  'Pull A':'#37c0ff', 'Pull B':'#818cf8',
+  'Legs A':'#34d399', 'Legs B':'#f472b6',
+  'Rest':'#64748b',
+};
+
+const QUOTES = [
+  "Discipline is choosing between what you want now and what you want most.",
+  "You don't have to be extreme, just consistent.",
+  "Show up — especially on the days you don't feel like it.",
+  "Your only competition is who you were yesterday.",
+  "Motivation gets you started; habit keeps you going.",
+  "Fall in love with the process and the results will come.",
+  "Small steps every day add up to big results.",
+  "Strength grows in the moments you keep going anyway.",
+  "Take care of your body — it's the only place you have to live.",
+  "Progress, not perfection.",
+  "The discomfort you push through today is the strength you carry tomorrow.",
+  "Win the morning, win the day.",
+  "You are building someone you'll be proud of.",
+];
+
+// ISO week helpers (drive the weekly quote + per-week meal log)
+function isoWeek(d){
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = (date.getUTCDay()+6)%7;
+  date.setUTCDate(date.getUTCDate()-day+3);
+  const firstThu = new Date(Date.UTC(date.getUTCFullYear(),0,4));
+  const fday = (firstThu.getUTCDay()+6)%7;
+  firstThu.setUTCDate(firstThu.getUTCDate()-fday+3);
+  return 1 + Math.round((date-firstThu)/(7*24*3600*1000));
+}
+const weekKey = (d) => d.getFullYear()+'-W'+String(isoWeek(d)).padStart(2,'0');
+
+// calorie & macro targets DERIVED from current bodyweight — change weight and these cascade
+const PROFILE = { height:191, age:28, activity:1.55, surplus:300 };
+function computeTargets(kg){
+  const w = Number(kg)||93;
+  const bmr = 10*w + 6.25*PROFILE.height - 5*PROFILE.age + 5;
+  const kcal = Math.round((bmr*PROFILE.activity + PROFILE.surplus)/10)*10;
+  const protein = Math.round(2*w);
+  const fat = Math.round(0.8*w);
+  const carbs = Math.round((kcal - protein*4 - fat*9)/4);
+  return { kcal, protein, carbs, fat, surplus:PROFILE.surplus };
+}
+
+// weekly grocery list, organised by store section (derived from the meal plan)
+const GROCERY = [
+  { section:'Produce', icon:'🥦', items:[
+    {n:'Bananas', q:'7'}, {n:'Apples', q:'4'}, {n:'Mixed berries', q:'500 g'},
+    {n:'Broccoli', q:'1 head'}, {n:'Mixed salad', q:'2 bags'},
+    {n:'Potatoes', q:'2 kg'}, {n:'Sweet potato', q:'1 kg'}, {n:'Onion & garlic', q:'1 pack'},
+  ]},
+  { section:'Dairy & Eggs', icon:'🥚', items:[
+    {n:'Skyr / quark', q:'2 kg'}, {n:'Greek yogurt', q:'1 kg'}, {n:'Cottage cheese', q:'1 kg'},
+    {n:'Eggs', q:'24'}, {n:'Semi-skim milk', q:'4 L'}, {n:'Cheese', q:'200 g'},
+  ]},
+  { section:'Meat & Fish', icon:'🍗', items:[
+    {n:'Chicken breast', q:'1 kg'}, {n:'Chicken thigh', q:'1 kg'}, {n:'5% beef mince', q:'600 g'},
+    {n:'Lean beef patties', q:'2'}, {n:'Salmon fillets', q:'3 (~450 g)'},
+    {n:'Tinned tuna', q:'8 tins'}, {n:'Sliced ham / turkey', q:'200 g'},
+  ]},
+  { section:'Pantry', icon:'🥫', items:[
+    {n:'Rolled oats', q:'1 kg'}, {n:'Whey protein', q:'1 tub'}, {n:'Pasta', q:'1 kg'},
+    {n:'Rice', q:'1 kg'}, {n:'Wholegrain bread', q:'1 loaf'}, {n:'Wholegrain wraps', q:'1 pack (8)'},
+    {n:'Peanut butter', q:'1 jar'}, {n:'Almonds / peanuts', q:'300 g'}, {n:'Granola', q:'500 g'},
+    {n:'Honey', q:'1 jar'}, {n:'Beans (kidney/baked)', q:'3 tins'}, {n:'Sweetcorn', q:'2 tins'},
+    {n:'Tomato passata', q:'3 packs'}, {n:'Light mayo', q:'1'}, {n:'Olive oil', q:'1'}, {n:'Salsa', q:'1 jar'},
+  ]},
+  { section:'Frozen', icon:'🧊', items:[
+    {n:'Mixed veg', q:'1 kg'}, {n:'Frozen berries', q:'500 g'},
+  ]},
+];
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+
+/* ----------------------------- Storage ----------------------------- */
+const LS_KEY = 'justin_lean_bulk_tracker_v1';
+const todayISO = () => new Date().toISOString().slice(0,10);
+const fmtDate = (iso) => {
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'short' });
+};
+const daysAgoISO = (n) => { const d = new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
+
+function seedWorkouts() {
+  // realistic seed history demonstrating PRs & trends
+  return [
+    { id:1, planId:'pushA', name:'Push A · Chest', date:daysAgoISO(11), durationSec:3180, exercises:[
+      { name:'DB Bench Press', muscle:'Chest', sets:[{w:18,r:10},{w:18,r:9},{w:18,r:8},{w:18,r:7}] },
+      { name:'DB Incline Press', muscle:'Chest', sets:[{w:14,r:11},{w:14,r:10},{w:14,r:9}] },
+      { name:'Cable Fly', muscle:'Chest', sets:[{w:10,r:14},{w:10,r:13},{w:10,r:12}] },
+      { name:'Cable Triceps Pushdown', muscle:'Arms', sets:[{w:20,r:14},{w:20,r:13},{w:20,r:12}] },
+    ]},
+    { id:2, planId:'legsA', name:'Legs A · Quad Focus', date:daysAgoISO(9), durationSec:3420, exercises:[
+      { name:'DB Goblet Squat', muscle:'Legs', sets:[{w:24,r:12},{w:24,r:11},{w:24,r:10},{w:24,r:10}] },
+      { name:'DB Bulgarian Split Squat', muscle:'Legs', sets:[{w:16,r:10},{w:16,r:9},{w:16,r:8}] },
+      { name:'DB Romanian Deadlift', muscle:'Legs', sets:[{w:20,r:12},{w:20,r:12},{w:20,r:11}] },
+      { name:'Standing DB Calf Raise', muscle:'Calves', sets:[{w:20,r:20},{w:20,r:18},{w:20,r:18},{w:20,r:16}] },
+    ]},
+    { id:3, planId:'pullA', name:'Pull A · Back Width', date:daysAgoISO(7), durationSec:3000, exercises:[
+      { name:'Pull-ups', muscle:'Back', sets:[{w:0,r:9},{w:0,r:8},{w:0,r:7},{w:0,r:6}] },
+      { name:'One-arm DB Row', muscle:'Back', sets:[{w:20,r:12},{w:20,r:11},{w:20,r:10},{w:20,r:10}] },
+      { name:'DB Hammer Curl', muscle:'Arms', sets:[{w:14,r:12},{w:14,r:11},{w:14,r:10}] },
+    ]},
+    { id:4, planId:'pushA', name:'Push A · Chest', date:daysAgoISO(4), durationSec:3300, exercises:[
+      { name:'DB Bench Press', muscle:'Chest', sets:[{w:20,r:10},{w:20,r:9},{w:20,r:8},{w:20,r:7}] }, // PR weight
+      { name:'DB Incline Press', muscle:'Chest', sets:[{w:16,r:10},{w:16,r:9},{w:16,r:8}] }, // PR
+      { name:'Cable Fly', muscle:'Chest', sets:[{w:12,r:13},{w:12,r:12},{w:12,r:12}] }, // PR
+      { name:'Cable Triceps Pushdown', muscle:'Arms', sets:[{w:22,r:13},{w:22,r:12},{w:22,r:11}] }, // PR
+      { name:'Overhead DB Triceps Ext', muscle:'Arms', sets:[{w:12,r:12},{w:12,r:11},{w:12,r:10}] },
+    ]},
+    { id:5, planId:'legsA', name:'Legs A · Quad Focus', date:daysAgoISO(2), durationSec:3540, exercises:[
+      { name:'DB Goblet Squat', muscle:'Legs', sets:[{w:26,r:11},{w:26,r:10},{w:26,r:10},{w:26,r:9}] }, // PR
+      { name:'DB Bulgarian Split Squat', muscle:'Legs', sets:[{w:18,r:10},{w:18,r:9},{w:18,r:8}] }, // PR
+      { name:'DB Romanian Deadlift', muscle:'Legs', sets:[{w:22,r:12},{w:22,r:11},{w:22,r:10}] }, // PR
+      { name:'DB Walking Lunge', muscle:'Legs', sets:[{w:16,r:12},{w:16,r:11},{w:16,r:10}] },
+      { name:'Standing DB Calf Raise', muscle:'Calves', sets:[{w:22,r:20},{w:22,r:18},{w:22,r:18},{w:22,r:16}] }, // PR
+    ]},
+  ];
+}
+
+function loadState() {
+  const defaults = { workouts: seedWorkouts(), profile:{ current:93, goal:98, timeline:'12 months' }, mealLog:{}, groceryChecked:{}, groceryQty:{} };
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return { ...defaults, ...JSON.parse(raw) };
+  } catch(e) {}
+  return defaults;
+}
+
+/* ----------------------------- Derived calcs ----------------------------- */
+const setVolume = (s) => (Number(s.w)||0) * (Number(s.r)||0);
+
+function computePRs(workouts) {
+  // best (max weight, then reps) per exercise
+  const prs = {};
+  workouts.forEach(w => {
+    w.exercises.forEach(ex => {
+      ex.sets.forEach(s => {
+        const w_ = Number(s.w)||0, r_ = Number(s.r)||0;
+        if (r_ <= 0) return;
+        const cur = prs[ex.name];
+        if (!cur || w_ > cur.w || (w_ === cur.w && r_ > cur.r)) {
+          prs[ex.name] = { w:w_, r:r_, date:w.date, muscle:ex.muscle };
+        }
+      });
+    });
+  });
+  return prs;
+}
+
+// which exercises in a given session set a new PR (vs all sessions strictly before it)
+function sessionPRs(workouts, sessionIdx) {
+  const session = workouts[sessionIdx];
+  const prior = workouts.filter((_, i) => i !== sessionIdx && workouts[i].date < session.date);
+  const priorBest = {};
+  prior.forEach(w => w.exercises.forEach(ex => ex.sets.forEach(s => {
+    const w_=Number(s.w)||0; priorBest[ex.name] = Math.max(priorBest[ex.name]||0, w_);
+  })));
+  const hits = [];
+  session.exercises.forEach(ex => {
+    const best = Math.max(0, ...ex.sets.map(s => Number(s.w)||0));
+    if (best > (priorBest[ex.name]||0) && best > 0) hits.push(ex.name);
+  });
+  return hits;
+}
+
+function computeStreak(workouts) {
+  const days = new Set(workouts.map(w => w.date));
+  let streak = 0;
+  let d = new Date();
+  // allow today to be a rest day: start from today, count back consecutive workout days
+  // streak = consecutive days (ending today or yesterday) with a workout
+  if (!days.has(todayISO())) {
+    // if no workout today, streak still counts up to yesterday
+    d.setDate(d.getDate()-1);
+  }
+  for (let i=0;i<400;i++){
+    const iso = d.toISOString().slice(0,10);
+    if (days.has(iso)) { streak++; d.setDate(d.getDate()-1); }
+    else break;
+  }
+  return streak;
+}
+
+function startOfWeek(date) {
+  const d = new Date(date); const day = (d.getDay()+6)%7; // Mon=0
+  d.setHours(0,0,0,0); d.setDate(d.getDate()-day); return d;
+}
+function thisWeekCount(workouts) {
+  const start = startOfWeek(new Date());
+  return workouts.filter(w => new Date(w.date+'T00:00:00') >= start).length;
+}
+function weeklyVolumeByMuscle(workouts) {
+  const start = startOfWeek(new Date());
+  const recent = workouts.filter(w => new Date(w.date+'T00:00:00') >= start);
+  const use = recent.length ? recent : workouts; // fall back to all-time if nothing this week
+  const vol = {};
+  use.forEach(w => w.exercises.forEach(ex => ex.sets.forEach(s => {
+    vol[ex.muscle] = (vol[ex.muscle]||0) + setVolume(s);
+  })));
+  return { vol, fellBack: recent.length===0 && workouts.length>0 };
+}
+function exerciseTrend(workouts, name) {
+  // top set weight per session over time
+  const pts = [];
+  [...workouts].sort((a,b)=>a.date<b.date?-1:1).forEach(w => {
+    const ex = w.exercises.find(e => e.name===name);
+    if (ex) { const top = Math.max(0,...ex.sets.map(s=>Number(s.w)||0)); pts.push({ date:w.date, w:top }); }
+  });
+  return pts;
+}
+const fmtDur = (sec) => {
+  const m = Math.floor(sec/60), s = sec%60;
+  return `${m}:${String(s).padStart(2,'0')}`;
+};
+
+/* ----------------------------- UI atoms ----------------------------- */
+function StatBox({ label, value, sub, accent }) {
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4 flex-1 min-w-0">
+      <div className="font-display text-4xl sm:text-5xl font-800 leading-none" style={{color: accent||'#fff'}}>{value}</div>
+      <div className="font-display tracking-widest text-[11px] text-slate-400 uppercase mt-2">{label}</div>
+      {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+function MusclePill({ muscle }) {
+  const c = MUSCLE_COLORS[muscle]||'#64748b';
+  return <span className="text-[10px] font-700 font-display tracking-wider uppercase px-2 py-0.5 rounded"
+    style={{ color:c, background:`${c}1f` }}>{muscle}</span>;
+}
+
+/* ----------------------------- Dashboard ----------------------------- */
+function Dashboard({ workouts, prs, profile, setProfile, onStart }) {
+  const streak = computeStreak(workouts);
+  const week = thisWeekCount(workouts);
+  const total = workouts.length;
+  const topPRs = Object.entries(prs)
+    .sort((a,b)=> b[1].w - a[1].w)
+    .slice(0,3);
+  const [editGoal, setEditGoal] = useState(false);
+  const [editCur, setEditCur] = useState(false);
+  const t = computeTargets(profile.current);
+
+  return (
+    <div className="space-y-5">
+      {/* header */}
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow">
+        <div className="font-display tracking-widest text-electric2 text-xs uppercase">Lean Bulk · {profile.timeline}</div>
+        <h1 className="font-display text-3xl font-800 mt-1">JUSTIN'S TRACKER</h1>
+        <div className="flex items-center gap-6 mt-4">
+          <div onClick={()=>setEditCur(v=>!v)} className="cursor-pointer">
+            {editCur ? (
+              <input autoFocus type="number" value={profile.current}
+                onChange={e=>setProfile({...profile, current:Number(e.target.value)})}
+                onBlur={()=>setEditCur(false)}
+                className="w-20 bg-ink border border-electric rounded-lg px-2 py-1 font-display text-2xl outline-none" />
+            ) : (
+              <div className="font-display text-2xl font-700">{profile.current}<span className="text-base text-slate-400"> kg</span></div>
+            )}
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">Current · tap to edit</div>
+          </div>
+          <div className="text-electric font-display text-2xl">→</div>
+          <div onClick={()=>setEditGoal(v=>!v)} className="cursor-pointer">
+            {editGoal ? (
+              <input autoFocus type="number" value={profile.goal}
+                onChange={e=>setProfile({...profile, goal:Number(e.target.value)})}
+                onBlur={()=>setEditGoal(false)}
+                className="w-20 bg-ink border border-electric rounded-lg px-2 py-1 font-display text-2xl text-electric2 outline-none" />
+            ) : (
+              <div className="font-display text-2xl font-700 text-electric2">{profile.goal}<span className="text-base text-slate-400"> kg</span></div>
+            )}
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">Goal · tap to edit</div>
+          </div>
+        </div>
+        <div className="mt-4 pt-3 border-t border-line flex items-center gap-2 text-[11px] text-slate-400">
+          <span className="font-display uppercase tracking-widest text-[10px] text-slate-500">Daily fuel</span>
+          <span className="font-700 text-slate-200">{t.kcal.toLocaleString()} kcal</span>
+          <span className="text-electric2 font-700">{t.protein}g protein</span>
+          <span className="text-slate-500">· auto-set from weight</span>
+        </div>
+      </div>
+
+      {/* stat boxes */}
+      <div className="flex gap-3">
+        <StatBox label="Day Streak" value={streak} accent="#37c0ff" sub={streak>0?'keep it alive':'start today'} />
+        <StatBox label="This Week" value={`${week}/6`} sub="sessions" />
+        <StatBox label="Total" value={total} sub="workouts" />
+      </div>
+
+      {/* quick launch */}
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Start a Session</div>
+        <div className="grid grid-cols-2 gap-3">
+          {PLAN.map(d => (
+            <button key={d.id} onClick={()=>onStart(d)}
+              className="text-left bg-card hover:bg-line border border-line rounded-2xl p-4 transition active:scale-95">
+              <div className="font-display tracking-widest text-electric2 text-[11px] uppercase">{d.label}</div>
+              <div className="font-display text-xl font-700 leading-tight mt-1">{d.name.split('·')[0]}</div>
+              <div className="text-[11px] text-slate-400 mt-1">{d.name.split('·')[1]} · {d.exercises.length} exercises</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* top PRs */}
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Top Personal Records</div>
+        <div className="space-y-2">
+          {topPRs.length===0 && <div className="text-slate-500 text-sm">Log a session to set your first PR.</div>}
+          {topPRs.map(([name, pr], i)=>(
+            <div key={name} className="flex items-center gap-3 bg-card border border-line rounded-xl p-3">
+              <div className="text-2xl">{['🥇','🥈','🥉'][i]}</div>
+              <div className="flex-1 min-w-0">
+                <div className="font-700 truncate">{name}</div>
+                <div className="flex items-center gap-2 mt-0.5"><MusclePill muscle={pr.muscle} /><span className="text-[11px] text-slate-500">{fmtDate(pr.date)}</span></div>
+              </div>
+              <div className="text-right">
+                <div className="font-display text-2xl font-800 text-electric2">{pr.w}<span className="text-sm text-slate-400">kg</span></div>
+                <div className="text-[11px] text-slate-500">× {pr.r} reps</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Workout logger ----------------------------- */
+const WARMUP = ['5 min easy cardio (bike / brisk walk)','Arm circles × 15 each way','Leg swings × 10 per leg','Bodyweight squats × 15','Band pull-aparts × 20'];
+const COOLDOWN = ['Chest doorway stretch · 30s/side','Lat hang / overhead reach · 30s','Hip flexor stretch · 30s/side','Hamstring stretch · 30s/side','3 min slow breathing'];
+
+function lastSession(workouts, exName) {
+  const sorted = [...workouts].sort((a,b)=>a.date<b.date?1:-1);
+  for (const w of sorted){ const ex = w.exercises.find(e=>e.name===exName); if (ex) return ex.sets; }
+  return null;
+}
+
+function WorkoutScreen({ active, setActive, workouts, onFinish, onDiscard }) {
+  const [elapsed, setElapsed] = useState(0);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [warmDone, setWarmDone] = useState({});
+  const [coolDone, setCoolDone] = useState({});
+
+  useEffect(()=>{
+    if (!active) return;
+    const t = setInterval(()=> setElapsed(Math.floor((Date.now()-active.startTime)/1000)), 1000);
+    return ()=>clearInterval(t);
+  }, [active]);
+
+  if (!active) return (
+    <div className="flex flex-col items-center justify-center text-center py-24 px-6">
+      <div className="text-5xl mb-4">🏋️</div>
+      <div className="font-display text-2xl font-800">NO ACTIVE SESSION</div>
+      <p className="text-slate-400 text-sm mt-2 max-w-xs">Head to the Dashboard and tap a workout day to start logging.</p>
+    </div>
+  );
+
+  const update = (fn) => setActive(prev => { const next = structuredClone(prev); fn(next); return next; });
+  const setCell = (ei,si,key,val)=> update(a=>{ a.exercises[ei].sets[si][key]=val; });
+  const toggleDone = (ei,si)=> update(a=>{ a.exercises[ei].sets[si].done = !a.exercises[ei].sets[si].done; });
+  const addSet = (ei)=> update(a=>{ const s=a.exercises[ei].sets; const last=s[s.length-1]; s.push({w:last?last.w:'',r:'',done:false}); });
+  const removeSet = (ei,si)=> update(a=>{ if(a.exercises[ei].sets.length>1) a.exercises[ei].sets.splice(si,1); });
+  const addExercise = (lib)=> { update(a=>{ a.exercises.push({ name:lib.name, muscle:lib.muscle, sets:[{w:'',r:'',done:false}] }); }); setPickerOpen(false); };
+
+  const totalSets = active.exercises.reduce((n,e)=>n+e.sets.length,0);
+  const doneSets = active.exercises.reduce((n,e)=>n+e.sets.filter(s=>s.done).length,0);
+
+  return (
+    <div className="space-y-4 pb-2">
+      {/* header */}
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-4 sticky top-0 z-20 glow">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-display tracking-widest text-electric2 text-[11px] uppercase">{fmtDate(active.date)}</div>
+            <div className="font-display text-2xl font-800 leading-tight">{active.name}</div>
+          </div>
+          <div className="text-right">
+            <div className="font-display text-3xl font-800 text-electric2 tabular-nums">{fmtDur(elapsed)}</div>
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">{doneSets}/{totalSets} sets</div>
+          </div>
+        </div>
+      </div>
+
+      {/* warmup */}
+      <Section title="Warm-up" tag="5 min" color="#facc15">
+        {WARMUP.map((w,i)=>(
+          <label key={i} className="flex items-center gap-3 py-1.5 cursor-pointer">
+            <Check on={!!warmDone[i]} onClick={()=>setWarmDone(p=>({...p,[i]:!p[i]}))} small />
+            <span className={`text-sm ${warmDone[i]?'text-slate-500 line-through':'text-slate-200'}`}>{w}</span>
+          </label>
+        ))}
+      </Section>
+
+      {/* exercises */}
+      {active.exercises.map((ex, ei)=>{
+        const prev = lastSession(workouts, ex.name);
+        return (
+        <div key={ei} className="bg-card border border-line rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-display text-xl font-700">{ex.name}</div>
+            <MusclePill muscle={ex.muscle} />
+          </div>
+          <div className="grid grid-cols-[28px_1fr_1fr_1fr_40px] gap-2 items-center text-[10px] uppercase tracking-widest text-slate-500 font-display mb-1 px-1">
+            <div>Set</div><div>Prev</div><div>Kg</div><div>Reps</div><div></div>
+          </div>
+          {ex.sets.map((s,si)=>{
+            const p = prev && prev[si] ? `${prev[si].w||0}×${prev[si].r||0}` : '—';
+            return (
+            <div key={si} className={`grid grid-cols-[28px_1fr_1fr_1fr_40px] gap-2 items-center mb-1.5 rounded-xl px-1 py-1 ${s.done?'bg-emerald-500/10':''}`}>
+              <div className="font-display font-700 text-slate-300 text-center">{si+1}</div>
+              <div className="text-[12px] text-slate-500 tabular-nums">{p}</div>
+              <input type="number" inputMode="decimal" value={s.w} placeholder="0"
+                onChange={e=>setCell(ei,si,'w',e.target.value)}
+                className={`w-full bg-ink border ${s.done?'border-emerald-500/40 text-emerald-300':'border-line'} rounded-lg px-2 py-2 text-center font-display text-lg font-700 outline-none focus:border-electric`} />
+              <input type="number" inputMode="numeric" value={s.r} placeholder="0"
+                onChange={e=>setCell(ei,si,'r',e.target.value)}
+                className={`w-full bg-ink border ${s.done?'border-emerald-500/40 text-emerald-300':'border-line'} rounded-lg px-2 py-2 text-center font-display text-lg font-700 outline-none focus:border-electric`} />
+              <div className="flex justify-center">
+                <Check on={s.done} onClick={()=>toggleDone(ei,si)}
+                  onContext={()=>removeSet(ei,si)} />
+              </div>
+            </div>
+          );})}
+          <button onClick={()=>addSet(ei)}
+            className="w-full mt-2 border border-dashed border-line hover:border-electric text-slate-400 hover:text-electric2 rounded-lg py-2 font-display tracking-widest text-xs uppercase transition">+ Add Set</button>
+        </div>
+      );})}
+
+      {/* add exercise */}
+      <button onClick={()=>setPickerOpen(true)}
+        className="w-full bg-electric/10 border border-electric/40 text-electric2 rounded-2xl py-3 font-display tracking-widest text-sm uppercase font-700 active:scale-95 transition">
+        + Add Exercise
+      </button>
+
+      {/* cooldown */}
+      <Section title="Cool-down" tag="stretch" color="#34d399">
+        {COOLDOWN.map((w,i)=>(
+          <label key={i} className="flex items-center gap-3 py-1.5 cursor-pointer">
+            <Check on={!!coolDone[i]} onClick={()=>setCoolDone(p=>({...p,[i]:!p[i]}))} small />
+            <span className={`text-sm ${coolDone[i]?'text-slate-500 line-through':'text-slate-200'}`}>{w}</span>
+          </label>
+        ))}
+      </Section>
+
+      {/* finish / discard */}
+      <div className="flex gap-3 pt-1">
+        <button onClick={onDiscard}
+          className="flex-1 border border-line text-slate-400 rounded-2xl py-3.5 font-display tracking-widest uppercase font-700 active:scale-95">Discard</button>
+        <button onClick={()=>onFinish(elapsed)}
+          className="flex-[2] bg-electric text-white rounded-2xl py-3.5 font-display tracking-widest uppercase font-800 glow active:scale-95">Finish Workout</button>
+      </div>
+
+      {/* bottom-sheet picker */}
+      {pickerOpen && (
+        <div className="fixed inset-0 z-40 flex items-end" onClick={()=>setPickerOpen(false)}>
+          <div className="absolute inset-0 bg-black/60"></div>
+          <div onClick={e=>e.stopPropagation()} className="relative w-full max-w-xl mx-auto bg-panel border-t border-line rounded-t-3xl p-5 sheet-in max-h-[70vh] overflow-y-auto">
+            <div className="w-12 h-1.5 bg-line rounded-full mx-auto mb-4"></div>
+            <div className="font-display text-xl font-800 mb-3">ADD EXERCISE</div>
+            <div className="grid grid-cols-1 gap-2">
+              {EXERCISE_LIBRARY.map(lib=>(
+                <button key={lib.name} onClick={()=>addExercise(lib)}
+                  className="flex items-center justify-between bg-card hover:bg-line border border-line rounded-xl px-4 py-3 transition text-left">
+                  <span className="font-600">{lib.name}</span>
+                  <MusclePill muscle={lib.muscle} />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, tag, color, children }) {
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-display text-lg font-700" style={{color}}>{title}</div>
+        <span className="text-[10px] font-display uppercase tracking-widest px-2 py-0.5 rounded" style={{color, background:`${color}1f`}}>{tag}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Check({ on, onClick, onContext, small }) {
+  const size = small ? 'w-6 h-6' : 'w-9 h-9';
+  return (
+    <button onClick={onClick}
+      onContextMenu={(e)=>{ if(onContext){ e.preventDefault(); onContext(); } }}
+      className={`${size} rounded-lg border flex items-center justify-center transition active:scale-90 ${on?'bg-emerald-500 border-emerald-400':'bg-ink border-line'}`}>
+      {on && <svg viewBox="0 0 24 24" className={small?'w-4 h-4':'w-5 h-5'} fill="none" stroke="white" strokeWidth="3"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+    </button>
+  );
+}
+
+/* ----------------------------- History ----------------------------- */
+function History({ workouts }) {
+  const sorted = workouts.map((w,i)=>({w,i})).sort((a,b)=> a.w.date<b.w.date?1:-1);
+  return (
+    <div className="space-y-4">
+      <h1 className="font-display text-3xl font-800">HISTORY</h1>
+      {sorted.length===0 && <div className="text-slate-500 text-sm">No workouts logged yet.</div>}
+      {sorted.map(({w,i})=>{
+        const prHits = sessionPRs(workouts, i);
+        const totalSets = w.exercises.reduce((n,e)=>n+e.sets.length,0);
+        return (
+          <div key={w.id} className="bg-card border border-line rounded-2xl p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="font-display text-xl font-800 leading-tight">{w.name}</div>
+                <div className="text-[12px] text-slate-400 mt-0.5">{fmtDate(w.date)}</div>
+              </div>
+              {prHits.length>0 && (
+                <span className="flex items-center gap-1 text-[11px] font-display uppercase tracking-widest text-yellow-300 bg-yellow-400/10 px-2 py-1 rounded-lg">🏆 {prHits.length} PR{prHits.length>1?'s':''}</span>
+              )}
+            </div>
+            <div className="flex gap-4 mt-3 text-[11px] uppercase tracking-widest font-display text-slate-400">
+              <span>⏱ {fmtDur(w.durationSec)}</span>
+              <span>· {totalSets} sets</span>
+              <span>· {w.exercises.length} exercises</span>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {w.exercises.map((ex,k)=>{
+                const isPR = prHits.includes(ex.name);
+                const c = MUSCLE_COLORS[ex.muscle]||'#64748b';
+                return (
+                  <span key={k} className="text-[11px] font-600 px-2.5 py-1 rounded-lg flex items-center gap-1"
+                    style={{ color:isPR?'#fde047':c, background:isPR?'#facc1518':`${c}14`, border: isPR?'1px solid #facc1555':'1px solid transparent' }}>
+                    {isPR && '🏆'}{ex.name}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ----------------------------- Progress ----------------------------- */
+function Progress({ workouts, prs }) {
+  const { vol, fellBack } = weeklyVolumeByMuscle(workouts);
+  const entries = Object.entries(vol).sort((a,b)=>b[1]-a[1]);
+  const max = Math.max(1, ...entries.map(e=>e[1]));
+
+  const trackedExercises = useMemo(()=>{
+    const names = new Set();
+    workouts.forEach(w=>w.exercises.forEach(e=>names.add(e.name)));
+    return [...names].filter(n => exerciseTrend(workouts,n).length>=2)
+      .sort((a,b)=> (prs[b]?.w||0)-(prs[a]?.w||0));
+  }, [workouts]);
+
+  return (
+    <div className="space-y-5">
+      <h1 className="font-display text-3xl font-800">PROGRESS</h1>
+
+      {/* volume bar chart */}
+      <div className="bg-card border border-line rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-display text-lg font-700">Volume by Muscle</div>
+          <span className="text-[10px] uppercase tracking-widest text-slate-500 font-display">{fellBack?'all-time':'this week'} · kg×reps</span>
+        </div>
+        <div className="space-y-3">
+          {entries.length===0 && <div className="text-slate-500 text-sm">No volume logged yet.</div>}
+          {entries.map(([m,v])=>{
+            const c = MUSCLE_COLORS[m]||'#64748b';
+            return (
+              <div key={m}>
+                <div className="flex justify-between text-[12px] mb-1">
+                  <span className="font-600" style={{color:c}}>{m}</span>
+                  <span className="text-slate-400 tabular-nums">{v.toLocaleString()}</span>
+                </div>
+                <div className="h-3 bg-ink rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all" style={{ width:`${(v/max)*100}%`, background:`linear-gradient(90deg, ${c}, ${c}aa)` }}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* per-exercise sparklines */}
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Strength Trends</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {trackedExercises.map(name=>{
+            const pts = exerciseTrend(workouts, name);
+            const pr = prs[name];
+            return <Sparkline key={name} name={name} pts={pts} pr={pr} />;
+          })}
+          {trackedExercises.length===0 && <div className="text-slate-500 text-sm">Log an exercise twice to see its trend.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ name, pts, pr }) {
+  const W=240, H=56, pad=6;
+  const ws = pts.map(p=>p.w);
+  const min = Math.min(...ws), max = Math.max(...ws);
+  const range = max-min || 1;
+  const stepX = pts.length>1 ? (W-pad*2)/(pts.length-1) : 0;
+  const coords = pts.map((p,i)=>{
+    const x = pad + i*stepX;
+    const y = H-pad - ((p.w-min)/range)*(H-pad*2);
+    return [x,y];
+  });
+  const path = coords.map((c,i)=> (i===0?'M':'L')+c[0].toFixed(1)+' '+c[1].toFixed(1)).join(' ');
+  const area = path + ` L ${coords[coords.length-1][0].toFixed(1)} ${H-pad} L ${coords[0][0].toFixed(1)} ${H-pad} Z`;
+  const c = MUSCLE_COLORS[pr?.muscle]||'#1d9bf0';
+  const up = pts.length>1 && pts[pts.length-1].w >= pts[0].w;
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4">
+      <div className="flex items-start justify-between mb-2">
+        <div className="font-600 text-sm leading-tight pr-2">{name}</div>
+        <div className="text-right shrink-0">
+          <div className="font-display text-2xl font-800" style={{color:c}}>{pr?.w}<span className="text-xs text-slate-400">kg</span></div>
+          <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">PR · ×{pr?.r}</div>
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height:H}}>
+        <defs>
+          <linearGradient id={`g-${name.replace(/\W/g,'')}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={c} stopOpacity="0.35"/>
+            <stop offset="100%" stopColor={c} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d={area} fill={`url(#g-${name.replace(/\W/g,'')})`} />
+        <path d={path} fill="none" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {coords.map((co,i)=><circle key={i} cx={co[0]} cy={co[1]} r="2.5" fill={c}/>)}
+      </svg>
+      <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+        <span>{fmtDate(pts[0].date)}</span>
+        <span className={up?'text-emerald-400':'text-slate-500'}>{up?'▲ trending up':'—'}</span>
+        <span>{fmtDate(pts[pts.length-1].date)}</span>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Meals ----------------------------- */
+function Meals({ profile, mealLog, onToggleMeal }) {
+  const now = new Date();
+  const wk = weekKey(now);
+  const quote = QUOTES[isoWeek(now) % QUOTES.length];
+  const t = computeTargets(profile.current);
+  const log = mealLog[wk] || {};
+  const todayIdx = now.getDay()===0 ? 6 : now.getDay()-1;
+  const [openDay, setOpenDay] = useState(todayIdx);
+  const slots = ['Breakfast','Lunch','Snack','Dinner'];
+  const totalMeals = MEALS.length * slots.length;
+  const doneMeals = Object.values(log).reduce((n,day)=> n + slots.filter(s=>day && day[s]).length, 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h1 className="font-display text-3xl font-800">MEAL PLAN</h1>
+        <div className="text-right">
+          <div className="font-display text-xl font-800 text-emerald-400">{doneMeals}/{totalMeals}</div>
+          <div className="text-[9px] uppercase tracking-widest text-slate-500 font-display">meals hit this wk</div>
+        </div>
+      </div>
+
+      {/* weekly motivational quote */}
+      <div className="bg-card border-l-4 border-electric rounded-xl px-4 py-2.5">
+        <div className="text-[9px] uppercase tracking-widest text-electric2 font-display">Quote of the week</div>
+        <div className="text-sm text-slate-200 italic leading-snug mt-0.5">"{quote}"</div>
+      </div>
+
+      {/* compact targets strip (derived from current weight) */}
+      <div className="flex items-center gap-3 bg-gradient-to-br from-card to-panel border border-line rounded-xl px-4 py-2.5 glow">
+        <div className="font-display text-2xl font-900 leading-none">{t.kcal.toLocaleString()}<span className="text-xs text-slate-400 font-700"> kcal</span></div>
+        <div className="ml-auto flex gap-4 text-right">
+          <div><div className="font-display text-base font-800 text-electric2 leading-none">{t.protein}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">protein</div></div>
+          <div><div className="font-display text-base font-800 text-emerald-400 leading-none">{t.carbs}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">carbs</div></div>
+          <div><div className="font-display text-base font-800 text-yellow-400 leading-none">{t.fat}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">fat</div></div>
+        </div>
+      </div>
+
+      {/* compact week — whole week visible, tap chips to log */}
+      <div className="space-y-1.5">
+        {MEALS.map((d,i)=>{
+          const fc = FOCUS_COLOR[d.focus] || '#64748b';
+          const total = d.meals.reduce((a,m)=>a+m.kcal,0);
+          const dayLog = log[i] || {};
+          const open = openDay===i;
+          const isToday = i===todayIdx;
+          return (
+            <div key={d.day} className="bg-card border border-line rounded-xl overflow-hidden" style={{borderLeft:`3px solid ${fc}`}}>
+              <div className="flex items-center gap-2 px-3 py-2">
+                <button onClick={()=>setOpenDay(open?-1:i)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                  <span className="font-display text-lg font-800 w-8">{d.day}</span>
+                  <span className="text-[9px] font-display uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap" style={{color:fc,background:`${fc}1f`}}>{d.focus}</span>
+                  {isToday && <span className="text-[8px] font-display uppercase tracking-widest text-electric2 whitespace-nowrap">• today</span>}
+                  <span className="ml-auto text-[10px] text-slate-500 tabular-nums whitespace-nowrap">{total.toLocaleString()}</span>
+                </button>
+                <div className="flex gap-1">
+                  {slots.map(s=>{
+                    const on = !!dayLog[s];
+                    return (
+                      <button key={s} onClick={()=>onToggleMeal(wk,i,s)} title={s}
+                        className={`w-6 h-6 rounded-md flex items-center justify-center font-display text-[11px] font-800 transition active:scale-90 ${on?'bg-emerald-500 text-white':'bg-ink text-slate-500 border border-line'}`}>
+                        {on?'✓':s[0]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {open && (
+                <div className="px-3 pb-2.5 space-y-1.5">
+                  {d.meals.map((m,k)=>{
+                    const meta = SLOT_META[m.slot];
+                    const on = !!dayLog[m.slot];
+                    return (
+                      <button key={k} onClick={()=>onToggleMeal(wk,i,m.slot)}
+                        className={`w-full text-left rounded-lg px-3 py-2 border transition ${on?'bg-emerald-500/10 border-emerald-500/30':'bg-ink border-line'}`}>
+                        <div className="flex items-center justify-between">
+                          <span className="font-display tracking-widest text-[9px] uppercase" style={{color:meta.color}}>{meta.icon} {m.slot}</span>
+                          <div className="flex gap-1 items-center">
+                            <span className="text-[9px] font-700 font-display px-1.5 py-0.5 rounded bg-white/5 text-slate-300">{m.kcal}</span>
+                            <span className="text-[9px] font-700 font-display px-1.5 py-0.5 rounded" style={{color:'#37c0ff',background:'#1d9bf01f'}}>{m.p}g P</span>
+                            {on && <span className="text-emerald-400 text-xs">✓</span>}
+                          </div>
+                        </div>
+                        <div className="font-600 text-sm mt-0.5">{m.name}</div>
+                        <div className="text-[11px] text-slate-400 leading-snug">{m.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="text-[10px] text-slate-500 text-center">Tap B / L / S / D to tick off each meal · resets every week · full list in Shop tab</div>
+    </div>
+  );
+}
+
+/* ----------------------------- Grocery (Shop tab) ----------------------------- */
+function Grocery({ checked, qty, onToggle, onQty, onReset }) {
+  const allItems = GROCERY.flatMap(s=>s.items.map(it=>slug(it.n)));
+  const doneCount = allItems.filter(id=>checked[id]).length;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h1 className="font-display text-3xl font-800">SHOP</h1>
+        <button onClick={onReset} className="text-[10px] font-display uppercase tracking-widest text-slate-400 border border-line rounded-lg px-3 py-1.5 active:scale-95">Reset</button>
+      </div>
+
+      <div className="flex items-center gap-3 bg-gradient-to-br from-card to-panel border border-line rounded-xl px-4 py-3 glow">
+        <div>
+          <div className="font-display text-2xl font-900 leading-none">{doneCount}<span className="text-slate-400 text-lg">/{allItems.length}</span></div>
+          <div className="text-[9px] uppercase tracking-widest text-slate-500 font-display mt-0.5">items in basket</div>
+        </div>
+        <div className="ml-auto text-right">
+          <div className="font-display text-2xl font-900 text-emerald-400 leading-none">≈ €110</div>
+          <div className="text-[9px] uppercase tracking-widest text-slate-500 font-display mt-0.5">budget €100–120</div>
+        </div>
+      </div>
+
+      {GROCERY.map(sec=>(
+        <div key={sec.section} className="bg-card border border-line rounded-xl p-3">
+          <div className="font-display text-sm font-800 tracking-wider uppercase text-slate-300 mb-2">{sec.icon} {sec.section}</div>
+          <div className="space-y-1">
+            {sec.items.map(it=>{
+              const id = slug(it.n);
+              const on = !!checked[id];
+              const q = qty[id] !== undefined ? qty[id] : it.q;
+              return (
+                <div key={id} className="flex items-center gap-2.5">
+                  <button onClick={()=>onToggle(id)}
+                    className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition active:scale-90 ${on?'bg-emerald-500 border-emerald-400':'bg-ink border-line'}`}>
+                    {on && <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="white" strokeWidth="3"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </button>
+                  <span className={`flex-1 text-sm ${on?'text-slate-500 line-through':'text-slate-200'}`}>{it.n}</span>
+                  <input value={q} onChange={e=>onQty(id, e.target.value)}
+                    className="w-20 bg-ink border border-line focus:border-electric rounded-lg px-2 py-1 text-center text-[12px] text-slate-300 outline-none" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      <div className="text-[11px] text-slate-500 leading-relaxed bg-card border border-line rounded-xl p-3">
+        Quantities cover the full 7-day plan for one person. Adjust any amount inline — quick-prep tip: batch-cook rice, pasta and chicken on Sunday, and lean on tinned tuna, eggs and skyr for no-cook meals.
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Bottom nav ----------------------------- */
+function Nav({ tab, setTab, activeBadge }) {
+  const items = [
+    { id:'dashboard', label:'Home', icon:'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10' },
+    { id:'workout', label:'Workout', icon:'M6.5 6.5l11 11M4 8l-1 1 3 3M20 16l1-1-3-3M8 4l-1 1 3 3M16 20l1-1-3-3' },
+    { id:'meals', label:'Meals', icon:'M5 3v8M8 3v8M6.5 11v10M17 3c-1.7 0-2.5 2-2.5 5s.8 4 2.5 4v9' },
+    { id:'shop', label:'Shop', icon:'M3 3h2l1.6 11.2a1 1 0 001 .8h9.7a1 1 0 001-.8L21 7H6M9 21a1 1 0 100-2 1 1 0 000 2zM18 21a1 1 0 100-2 1 1 0 000 2z' },
+    { id:'history', label:'History', icon:'M12 8v5l3 2M3 12a9 9 0 1018 0 9 9 0 00-18 0' },
+    { id:'progress', label:'Progress', icon:'M4 19V5M4 19h16M8 16l3-4 3 2 4-6' },
+  ];
+  return (
+    <div className="fixed bottom-0 inset-x-0 z-30 bg-panel/95 backdrop-blur border-t border-line">
+      <div className="max-w-xl mx-auto grid grid-cols-6">
+        {items.map(it=>{
+          const on = tab===it.id;
+          return (
+            <button key={it.id} onClick={()=>setTab(it.id)}
+              className="relative py-2.5 flex flex-col items-center gap-1">
+              <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none"
+                stroke={on?'#37c0ff':'#64748b'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d={it.icon}/>
+              </svg>
+              <span className="font-display tracking-widest text-[10px] uppercase" style={{color:on?'#37c0ff':'#64748b'}}>{it.label}</span>
+              {it.id==='workout' && activeBadge && <span className="absolute top-1.5 right-1/4 w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- App ----------------------------- */
+function App() {
+  const [state, setState] = useState(loadState);
+  const [tab, setTab] = useState('dashboard');
+  const [active, setActive] = useState(null);
+
+  useEffect(()=>{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }, [state]);
+
+  const prs = useMemo(()=>computePRs(state.workouts), [state.workouts]);
+
+  const startWorkout = (day) => {
+    setActive({
+      planId: day.id, name: day.name, date: todayISO(), startTime: Date.now(),
+      exercises: day.exercises.map(e=>({
+        name:e.name, muscle:e.muscle,
+        sets: Array.from({length:e.sets}, ()=>({ w:'', r:'', done:false }))
+      }))
+    });
+    setTab('workout');
+  };
+
+  const finishWorkout = (elapsed) => {
+    const cleaned = active.exercises
+      .map(e=>({ name:e.name, muscle:e.muscle, sets:e.sets.filter(s=>(Number(s.r)||0)>0).map(s=>({w:Number(s.w)||0, r:Number(s.r)||0})) }))
+      .filter(e=>e.sets.length>0);
+    if (cleaned.length===0) { setActive(null); setTab('dashboard'); return; }
+    const newWorkout = { id:Date.now(), planId:active.planId, name:active.name, date:active.date, durationSec:elapsed, exercises:cleaned };
+    setState(s=>({ ...s, workouts:[...s.workouts, newWorkout] }));
+    setActive(null);
+    setTab('history');
+  };
+
+  const discardWorkout = () => { setActive(null); setTab('dashboard'); };
+
+  const toggleMeal = (wk, di, slot) => setState(s=>{
+    const ml = { ...(s.mealLog||{}) };
+    const week = { ...(ml[wk]||{}) };
+    const day = { ...(week[di]||{}) };
+    day[slot] = !day[slot];
+    week[di] = day; ml[wk] = week;
+    return { ...s, mealLog:ml };
+  });
+  const toggleGrocery = (id) => setState(s=>({ ...s, groceryChecked:{ ...(s.groceryChecked||{}), [id]: !(s.groceryChecked||{})[id] } }));
+  const setGroceryQty = (id, val) => setState(s=>({ ...s, groceryQty:{ ...(s.groceryQty||{}), [id]: val } }));
+  const resetGrocery = () => setState(s=>({ ...s, groceryChecked:{} }));
+
+  return (
+    <div className="min-h-screen text-slate-100 max-w-xl mx-auto px-4 pt-5 pb-28">
+      {tab==='dashboard' && <Dashboard workouts={state.workouts} prs={prs} profile={state.profile}
+        setProfile={(p)=>setState(s=>({...s, profile:p}))} onStart={startWorkout} />}
+      {tab==='workout' && <WorkoutScreen active={active} setActive={setActive} workouts={state.workouts}
+        onFinish={finishWorkout} onDiscard={discardWorkout} />}
+      {tab==='meals' && <Meals profile={state.profile} mealLog={state.mealLog||{}} onToggleMeal={toggleMeal} />}
+      {tab==='shop' && <Grocery checked={state.groceryChecked||{}} qty={state.groceryQty||{}} onToggle={toggleGrocery} onQty={setGroceryQty} onReset={resetGrocery} />}
+      {tab==='history' && <History workouts={state.workouts} />}
+      {tab==='progress' && <Progress workouts={state.workouts} prs={prs} />}
+      <Nav tab={tab} setTab={setTab} activeBadge={!!active} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
