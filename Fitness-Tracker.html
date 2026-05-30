@@ -11,6 +11,8 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script>
   tailwind.config = {
     theme: {
@@ -1011,13 +1013,61 @@ function Nav({ tab, setTab, activeBadge }) {
   );
 }
 
+/* ----------------------------- Cloud sync (Firebase) ----------------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyAKYYa784BakDWscIEsyvxsFqCQNVeb7mE",
+  authDomain: "justin-s-fitness-tracker.firebaseapp.com",
+  projectId: "justin-s-fitness-tracker",
+  storageBucket: "justin-s-fitness-tracker.firebasestorage.app",
+  messagingSenderId: "716496859067",
+  appId: "1:716496859067:web:32ca055cb1f005efd41e9e"
+};
+const SYNC_DOC = 'justin-main'; // shared document — same on every device
+
 /* ----------------------------- App ----------------------------- */
 function App() {
   const [state, setState] = useState(loadState);
   const [tab, setTab] = useState('dashboard');
   const [active, setActive] = useState(null);
+  const [sync, setSync] = useState('connecting'); // connecting | synced | offline
 
-  useEffect(()=>{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }, [state]);
+  const stateRef = useRef(state); stateRef.current = state;
+  const docRef = useRef(null);
+  const applyingRemote = useRef(false);
+
+  // connect to Firestore + live-subscribe to the shared document
+  useEffect(()=>{
+    try {
+      if (!window.firebase || !firebase.firestore) { setSync('offline'); return; }
+      if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      const db = firebase.firestore();
+      docRef.current = db.collection('trackers').doc(SYNC_DOC);
+      const unsub = docRef.current.onSnapshot((snap)=>{
+        if (snap.exists && snap.data() && snap.data().payload) {
+          try {
+            const remote = JSON.parse(snap.data().payload);
+            applyingRemote.current = true;
+            setState(remote);
+          } catch(e) {}
+          setSync('synced');
+        } else {
+          // first time on this project: seed the cloud with current local state
+          docRef.current.set({ payload: JSON.stringify(stateRef.current), updated: Date.now() }).catch(()=>{});
+          setSync('synced');
+        }
+      }, (err)=>{ console.warn('sync error', err); setSync('offline'); });
+      return ()=>unsub();
+    } catch(e) { setSync('offline'); }
+  }, []);
+
+  // persist locally always; push to cloud on local changes (skip echoes from remote)
+  useEffect(()=>{
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    if (applyingRemote.current) { applyingRemote.current = false; return; }
+    if (docRef.current) {
+      docRef.current.set({ payload: JSON.stringify(state), updated: Date.now() }).catch(()=>{});
+    }
+  }, [state]);
 
   const prs = useMemo(()=>computePRs(state.workouts), [state.workouts]);
 
@@ -1057,8 +1107,14 @@ function App() {
   const setGroceryQty = (id, val) => setState(s=>({ ...s, groceryQty:{ ...(s.groceryQty||{}), [id]: val } }));
   const resetGrocery = () => setState(s=>({ ...s, groceryChecked:{} }));
 
+  const syncStyle = sync==='synced' ? {color:'#34d399',background:'#34d39915',borderColor:'#34d39940'}
+    : sync==='offline' ? {color:'#facc15',background:'#facc1515',borderColor:'#facc1540'}
+    : {color:'#37c0ff',background:'#1d9bf015',borderColor:'#1d9bf040'};
   return (
     <div className="min-h-screen text-slate-100 max-w-xl mx-auto px-4 pt-5 pb-28">
+      <div className="fixed top-2 right-2 z-50 text-[9px] font-display uppercase tracking-widest px-2 py-1 rounded-full border" style={syncStyle}>
+        {sync==='synced' ? '☁ synced' : sync==='offline' ? '⚠ offline' : '… syncing'}
+      </div>
       {tab==='dashboard' && <Dashboard workouts={state.workouts} prs={prs} profile={state.profile}
         setProfile={(p)=>setState(s=>({...s, profile:p}))} onStart={startWorkout} />}
       {tab==='workout' && <WorkoutScreen active={active} setActive={setActive} workouts={state.workouts}
