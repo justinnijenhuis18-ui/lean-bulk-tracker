@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Justin · Life Dashboard</title>
+<meta name="theme-color" content="#070a0f">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: {
+      fontFamily: { display: ['"Barlow Condensed"', 'sans-serif'], body: ['Barlow', 'sans-serif'] },
+      colors: { ink:'#070a0f', panel:'#0e131c', card:'#141b27', line:'#202a3a', electric:'#1d9bf0', electric2:'#37c0ff' },
+    }},
+  };
+</script>
+<style>
+  html, body { background:#070a0f; }
+  body { font-family:'Barlow', sans-serif; -webkit-tap-highlight-color: transparent; }
+  .font-display { font-family:'Barlow Condensed', sans-serif; }
+  input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; }
+  ::-webkit-scrollbar { width:0; height:0; }
+  .glow { box-shadow: 0 0 0 1px rgba(29,155,240,.25), 0 8px 30px -10px rgba(29,155,240,.45); }
+  .sheet-in { animation: sheetIn .25s cubic-bezier(.2,.8,.2,1); }
+  @keyframes sheetIn { from { transform: translateY(100%);} to { transform: translateY(0);} }
+  .ring-fg { transition: stroke-dashoffset .6s cubic-bezier(.2,.8,.2,1); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* =========================================================================
+   LIFE AREAS
+   ========================================================================= */
+const AREAS = {
+  fitness:   { label:'Fitness & gezondheid', short:'Fitness',  color:'#37c0ff' },
+  financien: { label:'Financiën',            short:'Geld',     color:'#34d399' },
+  mentaal:   { label:'Mentaal & persoonlijk',short:'Mentaal',  color:'#a78bfa' },
+  werk:      { label:'Werk & carrière',      short:'Werk',     color:'#f59e0b' },
+};
+
+/* Goal model:
+   { id, area, name, icon, cadence:'daily'|'weekly'|'monthly',
+     metric:'value'|'count', target, unit, color, auto? } */
+const SEED_GOALS = [
+  { id:'sparen',     area:'financien', name:'Sparen',        icon:'💶', cadence:'monthly', metric:'value', target:400,   unit:'€' },
+  { id:'stappen',    area:'fitness',   name:'Stappen',       icon:'👟', cadence:'daily',   metric:'value', target:10000, unit:'' },
+  { id:'gym',        area:'fitness',   name:'Gym',           icon:'🏋️', cadence:'weekly',  metric:'count', target:6,     unit:'x', auto:'gym' },
+  { id:'hardlopen',  area:'fitness',   name:'Hardlopen',     icon:'🏃', cadence:'weekly',  metric:'count', target:3,     unit:'x' },
+  { id:'slaap',      area:'fitness',   name:'Slaap',         icon:'😴', cadence:'daily',   metric:'value', target:7.5,   unit:'u' },
+  { id:'meditatie',  area:'mentaal',   name:'Meditatie 15m', icon:'🧘', cadence:'daily',   metric:'count', target:1,     unit:'' },
+  { id:'zonnen',     area:'mentaal',   name:'Zonnen',        icon:'☀️', cadence:'weekly',  metric:'count', target:1,     unit:'x' },
+];
+
+/* =========================================================================
+   DATE HELPERS
+   ========================================================================= */
+const todayISO = () => new Date().toISOString().slice(0,10);
+const monthKey = (iso) => iso.slice(0,7);
+const daysAgoISO = (n) => { const d = new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
+const fmtDate = (iso) => new Date(iso+'T00:00:00').toLocaleDateString('nl-NL', { weekday:'short', day:'numeric', month:'short' });
+function startOfWeek(date){ const d=new Date(date); const day=(d.getDay()+6)%7; d.setHours(0,0,0,0); d.setDate(d.getDate()-day); return d; }
+function isoWeek(d){ const date=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=(date.getUTCDay()+6)%7; date.setUTCDate(date.getUTCDate()-day+3); const f=new Date(Date.UTC(date.getUTCFullYear(),0,4)); const fd=(f.getUTCDay()+6)%7; f.setUTCDate(f.getUTCDate()-fd+3); return 1+Math.round((date-f)/(7*24*3600*1000)); }
+const weekKey = (d) => d.getFullYear()+'-W'+String(isoWeek(d)).padStart(2,'0');
+const nfmt = (n) => (Number(n)||0).toLocaleString('nl-NL');
+
+/* =========================================================================
+   FITNESS PLAN DATA (ported)
+   ========================================================================= */
+const MUSCLE_COLORS = { Chest:'#1d9bf0', Back:'#37c0ff', Shoulders:'#22d3ee', Arms:'#818cf8', Legs:'#34d399', Glutes:'#f472b6', Calves:'#facc15', Core:'#fb923c' };
+const PLAN = [
+  { id:'pushA', label:'Dag 1', name:'Push A · Chest', exercises:[
+    { name:'DB Bench Press', muscle:'Chest', sets:4, reps:'6–10' },
+    { name:'DB Incline Press', muscle:'Chest', sets:3, reps:'8–12' },
+    { name:'Cable Fly', muscle:'Chest', sets:3, reps:'12–15' },
+    { name:'Cable Triceps Pushdown', muscle:'Arms', sets:3, reps:'10–15' },
+    { name:'Overhead DB Triceps Ext', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'pullA', label:'Dag 2', name:'Pull A · Back Width', exercises:[
+    { name:'Pull-ups', muscle:'Back', sets:4, reps:'6–10' },
+    { name:'One-arm DB Row', muscle:'Back', sets:4, reps:'8–12' },
+    { name:'Cable Lat Pulldown', muscle:'Back', sets:3, reps:'10–12' },
+    { name:'Cable Face Pull', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'DB Hammer Curl', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'legsA', label:'Dag 3', name:'Legs A · Quad Focus', exercises:[
+    { name:'DB Goblet Squat', muscle:'Legs', sets:4, reps:'8–12' },
+    { name:'DB Bulgarian Split Squat', muscle:'Legs', sets:3, reps:'8–12' },
+    { name:'DB Romanian Deadlift', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'DB Walking Lunge', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'Standing DB Calf Raise', muscle:'Calves', sets:4, reps:'15–20' },
+  ]},
+  { id:'pushB', label:'Dag 4', name:'Push B · Shoulders', exercises:[
+    { name:'Seated DB Shoulder Press', muscle:'Shoulders', sets:4, reps:'6–10' },
+    { name:'DB Bench Press', muscle:'Chest', sets:3, reps:'8–12' },
+    { name:'DB Lateral Raise', muscle:'Shoulders', sets:4, reps:'12–20' },
+    { name:'Cable Lateral Raise', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'Cable Triceps Pushdown', muscle:'Arms', sets:3, reps:'12–15' },
+  ]},
+  { id:'pullB', label:'Dag 5', name:'Pull B · Back Thickness', exercises:[
+    { name:'DB Bent-over Row', muscle:'Back', sets:4, reps:'8–12' },
+    { name:'Chin-ups', muscle:'Back', sets:3, reps:'6–10' },
+    { name:'Cable Seated Row', muscle:'Back', sets:3, reps:'10–12' },
+    { name:'Cable Face Pull', muscle:'Shoulders', sets:3, reps:'15' },
+    { name:'DB Incline Curl', muscle:'Arms', sets:3, reps:'10–12' },
+  ]},
+  { id:'legsB', label:'Dag 6', name:'Legs B · Posterior Chain', exercises:[
+    { name:'DB Romanian Deadlift', muscle:'Legs', sets:4, reps:'8–12' },
+    { name:'Front-foot-elevated Split Squat', muscle:'Legs', sets:3, reps:'10–12' },
+    { name:'DB Hip Thrust', muscle:'Glutes', sets:3, reps:'12–15' },
+    { name:'Cable Pull-through', muscle:'Glutes', sets:3, reps:'15' },
+    { name:'Seated Calf Raise', muscle:'Calves', sets:4, reps:'15–20' },
+  ]},
+];
+const EXERCISE_LIBRARY = (() => {
+  const m = {}; PLAN.forEach(d => d.exercises.forEach(e => { m[e.name] = e.muscle; }));
+  Object.assign(m, { 'Push-up':'Chest','DB Pullover':'Back','DB Shrug':'Back','DB Concentration Curl':'Arms','Plank':'Core','Hanging Leg Raise':'Core','DB Step-up':'Legs','DB Reverse Fly':'Shoulders' });
+  return Object.keys(m).sort().map(name => ({ name, muscle:m[name] }));
+})();
+
+const MEALS = [
+  { day:'Ma', focus:'Push A', meals:[
+    { slot:'Breakfast', name:'Skyr & oats power bowl', desc:'100g havermout · 300g skyr · banaan · 20g pindakaas · honing', kcal:810, p:52 },
+    { slot:'Lunch', name:'Dubbele kipwrap', desc:'2 volkoren wraps · 150g kip · salade · light mayo · appel', kcal:760, p:50 },
+    { slot:'Snack', name:'Wheyshake + amandelen', desc:'1 schep whey · 300ml melk · 30g amandelen', kcal:470, p:40 },
+    { slot:'Dinner', name:'Rundvlees bolognese', desc:'180g 5% gehakt · 110g (droog) pasta · tomaten-groentesaus', kcal:1120, p:56 },
+  ]},
+  { day:'Di', focus:'Pull A', meals:[
+    { slot:'Breakfast', name:'Roerei op toast', desc:'4 eieren · 2 volkoren toast · 150g skyr ernaast', kcal:790, p:50 },
+    { slot:'Lunch', name:'Tonijn pastasalade', desc:'2 blikjes tonijn · 100g (droog) pasta · maïs · light mayo', kcal:820, p:55 },
+    { slot:'Snack', name:'Cottage cheese & rijstwafels', desc:'250g cottage cheese · 3 rijstwafels · honing', kcal:410, p:34 },
+    { slot:'Dinner', name:'Kip & rijst bowl', desc:'200g kipdij · 100g (droog) rijst · roerbakgroenten · soja', kcal:1140, p:62 },
+  ]},
+  { day:'Wo', focus:'Legs A', meals:[
+    { slot:'Breakfast', name:'Overnight oats', desc:'100g havermout · 300ml melk · 1 schep whey · banaan · bessen', kcal:800, p:48 },
+    { slot:'Lunch', name:'Ham & kaas boterhammen', desc:'2 volkoren boterhammen · Griekse yoghurt · fruit', kcal:780, p:48 },
+    { slot:'Snack', name:'Pindakaas toast + kwark', desc:'Pindakaas op volkoren toast · 300g kwark', kcal:540, p:41 },
+    { slot:'Dinner', name:'Zalm, aardappel & broccoli', desc:'150g zalm · 350g aardappel · broccoli · olijfolie', kcal:1150, p:52 },
+  ]},
+  { day:'Do', focus:'Push B', meals:[
+    { slot:'Breakfast', name:'Skyr & oats power bowl', desc:'100g havermout · 300g skyr · banaan · 20g pindakaas · honing', kcal:810, p:52 },
+    { slot:'Lunch', name:'Kip & rijst prep box', desc:'150g kip · 100g (droog) rijst · geroosterde groenten', kcal:720, p:48 },
+    { slot:'Snack', name:'Wheyshake + pinda’s', desc:'1 schep whey · banaan · 30g pinda’s', kcal:450, p:38 },
+    { slot:'Dinner', name:'Magere runderburgers', desc:'2 5% burgers · volkoren buns · zoete-aardappelwedges · salade', kcal:1180, p:58 },
+  ]},
+  { day:'Vr', focus:'Pull B', meals:[
+    { slot:'Breakfast', name:'Kaasomelet', desc:'4 eieren · 30g kaas · 2 volkoren toast', kcal:760, p:44 },
+    { slot:'Lunch', name:'Tonijn & ei gepofte aardappel', desc:'grote aardappel · 1 blik tonijn · 2 eieren · light mayo · salade', kcal:740, p:48 },
+    { slot:'Snack', name:'Griekse yoghurt & granola', desc:'300g Griekse yoghurt · granola · honing', kcal:460, p:32 },
+    { slot:'Dinner', name:'Kip pasta', desc:'180g kip · 110g (droog) pasta · tomatensaus · groenten', kcal:1180, p:70 },
+  ]},
+  { day:'Za', focus:'Legs B', meals:[
+    { slot:'Breakfast', name:'Proteïne pannenkoeken', desc:'100g havermout · 1 schep whey · 2 eieren · banaan · yoghurt', kcal:820, p:55 },
+    { slot:'Lunch', name:'Rundvlees burrito bowl', desc:'150g 5% gehakt · 100g (droog) rijst · bonen · salsa · kaas', kcal:880, p:52 },
+    { slot:'Snack', name:'Cottage cheese & noten', desc:'250g cottage cheese · fruit · 20g noten', kcal:430, p:32 },
+    { slot:'Dinner', name:'Geroosterde kip & aardappel', desc:'250g kipdij · 300g aardappel · geroosterde groenten', kcal:1100, p:60 },
+  ]},
+  { day:'Zo', focus:'Rust', meals:[
+    { slot:'Breakfast', name:'Grote skyr bowl', desc:'300g skyr · 80g granola · banaan · bessen · honing', kcal:760, p:44 },
+    { slot:'Lunch', name:'Omelet, toast & bonen', desc:'4 eieren · 2 volkoren toast · bruine bonen', kcal:760, p:42 },
+    { slot:'Snack', name:'Wheyshake + amandelen', desc:'1 schep whey · 300ml melk · 30g amandelen', kcal:510, p:41 },
+    { slot:'Dinner', name:'Zalm traybake', desc:'150g zalm · 300g aardappel · groenten · 150g skyr toe', kcal:1150, p:55 },
+  ]},
+];
+const SLOT_META = { Breakfast:{icon:'🌅',color:'#facc15',nl:'Ontbijt'}, Lunch:{icon:'🥪',color:'#34d399',nl:'Lunch'}, Snack:{icon:'🥤',color:'#37c0ff',nl:'Snack'}, Dinner:{icon:'🍽️',color:'#818cf8',nl:'Diner'} };
+const FOCUS_COLOR = { 'Push A':'#1d9bf0','Push B':'#22d3ee','Pull A':'#37c0ff','Pull B':'#818cf8','Legs A':'#34d399','Legs B':'#f472b6','Rust':'#64748b' };
+const QUOTES = [
+  "Discipline is kiezen tussen wat je nu wil en wat je het meest wil.",
+  "Je hoeft niet extreem te zijn, alleen consistent.",
+  "Kom op — juist op de dagen dat je geen zin hebt.",
+  "Je enige concurrent is wie je gisteren was.",
+  "Motivatie zet je in beweging; gewoonte houdt je gaande.",
+  "Word verliefd op het proces en de resultaten volgen.",
+  "Kleine stappen elke dag worden grote resultaten.",
+  "Win de ochtend, win de dag.",
+  "Je bouwt aan iemand op wie je trots zult zijn.",
+];
+const GROCERY = [
+  { section:'Groente & Fruit', icon:'🥦', items:[ {n:'Bananen',q:'7'},{n:'Appels',q:'4'},{n:'Bessen mix',q:'500 g'},{n:'Broccoli',q:'1 stuk'},{n:'Salademix',q:'2 zakken'},{n:'Aardappel',q:'2 kg'},{n:'Zoete aardappel',q:'1 kg'},{n:'Ui & knoflook',q:'1 pak'} ]},
+  { section:'Zuivel & Eieren', icon:'🥚', items:[ {n:'Skyr / kwark',q:'2 kg'},{n:'Griekse yoghurt',q:'1 kg'},{n:'Cottage cheese',q:'1 kg'},{n:'Eieren',q:'24'},{n:'Halfvolle melk',q:'4 L'},{n:'Kaas',q:'200 g'} ]},
+  { section:'Vlees & Vis', icon:'🍗', items:[ {n:'Kipfilet',q:'1 kg'},{n:'Kipdij',q:'1 kg'},{n:'5% rundergehakt',q:'600 g'},{n:'Magere burgers',q:'2'},{n:'Zalmfilet',q:'3 (~450 g)'},{n:'Tonijn in blik',q:'8 blik'},{n:'Ham / kalkoen',q:'200 g'} ]},
+  { section:'Voorraadkast', icon:'🥫', items:[ {n:'Havermout',q:'1 kg'},{n:'Whey proteïne',q:'1 pot'},{n:'Pasta',q:'1 kg'},{n:'Rijst',q:'1 kg'},{n:'Volkoren brood',q:'1 brood'},{n:'Volkoren wraps',q:'1 pak (8)'},{n:'Pindakaas',q:'1 pot'},{n:'Amandelen / pinda’s',q:'300 g'},{n:'Granola',q:'500 g'},{n:'Honing',q:'1 pot'},{n:'Bonen',q:'3 blik'},{n:'Maïs',q:'2 blik'},{n:'Passata',q:'3 pak'},{n:'Light mayo',q:'1'},{n:'Olijfolie',q:'1'},{n:'Salsa',q:'1 pot'} ]},
+  { section:'Diepvries', icon:'🧊', items:[ {n:'Groente mix',q:'1 kg'},{n:'Diepvriesbessen',q:'500 g'} ]},
+];
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+
+/* macro targets derived from bodyweight */
+const PROFILE = { height:191, age:28, activity:1.55, surplus:300 };
+function computeTargets(kg){
+  const w = Number(kg)||93;
+  const bmr = 10*w + 6.25*PROFILE.height - 5*PROFILE.age + 5;
+  const kcal = Math.round((bmr*PROFILE.activity + PROFILE.surplus)/10)*10;
+  const protein = Math.round(2*w), fat = Math.round(0.8*w);
+  const carbs = Math.round((kcal - protein*4 - fat*9)/4);
+  return { kcal, protein, carbs, fat };
+}
+
+/* =========================================================================
+   SEED + STORAGE
+   ========================================================================= */
+const LS_KEY = 'justin_life_dashboard_v1';
+function seedWorkouts(){ return [
+  { id:1, planId:'pushA', name:'Push A · Chest', date:daysAgoISO(11), durationSec:3180, exercises:[
+    { name:'DB Bench Press', muscle:'Chest', sets:[{w:18,r:10},{w:18,r:9},{w:18,r:8},{w:18,r:7}] },
+    { name:'DB Incline Press', muscle:'Chest', sets:[{w:14,r:11},{w:14,r:10},{w:14,r:9}] },
+    { name:'Cable Fly', muscle:'Chest', sets:[{w:10,r:14},{w:10,r:13},{w:10,r:12}] },
+  ]},
+  { id:2, planId:'legsA', name:'Legs A · Quad Focus', date:daysAgoISO(9), durationSec:3420, exercises:[
+    { name:'DB Goblet Squat', muscle:'Legs', sets:[{w:24,r:12},{w:24,r:11},{w:24,r:10}] },
+    { name:'DB Romanian Deadlift', muscle:'Legs', sets:[{w:20,r:12},{w:20,r:12},{w:20,r:11}] },
+  ]},
+  { id:3, planId:'pullA', name:'Pull A · Back Width', date:daysAgoISO(7), durationSec:3000, exercises:[
+    { name:'Pull-ups', muscle:'Back', sets:[{w:0,r:9},{w:0,r:8},{w:0,r:7}] },
+    { name:'One-arm DB Row', muscle:'Back', sets:[{w:20,r:12},{w:20,r:11},{w:20,r:10}] },
+  ]},
+  { id:4, planId:'pushA', name:'Push A · Chest', date:daysAgoISO(4), durationSec:3300, exercises:[
+    { name:'DB Bench Press', muscle:'Chest', sets:[{w:20,r:10},{w:20,r:9},{w:20,r:8}] },
+    { name:'DB Incline Press', muscle:'Chest', sets:[{w:16,r:10},{w:16,r:9},{w:16,r:8}] },
+  ]},
+]; }
+
+function loadState(){
+  const defaults = {
+    goals: SEED_GOALS,
+    dayLog: {}, monthLog: {}, metrics: {},
+    workouts: seedWorkouts(),
+    profile: { current:93, goal:98, timeline:'12 maanden' },
+    mealLog:{}, groceryChecked:{}, groceryQty:{},
+  };
+  try { const raw = localStorage.getItem(LS_KEY); if (raw) return mergeState(defaults, JSON.parse(raw)); } catch(e){}
+  return defaults;
+}
+function mergeState(def, saved){
+  const s = { ...def, ...saved };
+  // ensure new keys always exist even if loading an older payload
+  s.goals   = (saved && saved.goals && saved.goals.length) ? saved.goals : def.goals;
+  s.dayLog  = saved.dayLog  || {};
+  s.monthLog= saved.monthLog|| {};
+  s.metrics = saved.metrics || {};
+  s.profile = { ...def.profile, ...(saved.profile||{}) };
+  return s;
+}
+
+/* =========================================================================
+   FITNESS DERIVED CALCS (ported)
+   ========================================================================= */
+const setVolume = (s) => (Number(s.w)||0)*(Number(s.r)||0);
+function computePRs(workouts){ const prs={}; workouts.forEach(w=>w.exercises.forEach(ex=>ex.sets.forEach(s=>{ const w_=Number(s.w)||0,r_=Number(s.r)||0; if(r_<=0)return; const c=prs[ex.name]; if(!c||w_>c.w||(w_===c.w&&r_>c.r)) prs[ex.name]={w:w_,r:r_,date:w.date,muscle:ex.muscle}; }))); return prs; }
+function sessionPRs(workouts, idx){ const session=workouts[idx]; const prior=workouts.filter((_,i)=>i!==idx&&workouts[i].date<session.date); const pb={}; prior.forEach(w=>w.exercises.forEach(ex=>ex.sets.forEach(s=>{ pb[ex.name]=Math.max(pb[ex.name]||0,Number(s.w)||0); }))); const hits=[]; session.exercises.forEach(ex=>{ const best=Math.max(0,...ex.sets.map(s=>Number(s.w)||0)); if(best>(pb[ex.name]||0)&&best>0) hits.push(ex.name); }); return hits; }
+function thisWeekCount(workouts){ const start=startOfWeek(new Date()); return workouts.filter(w=>new Date(w.date+'T00:00:00')>=start).length; }
+function weeklyVolumeByMuscle(workouts){ const start=startOfWeek(new Date()); const recent=workouts.filter(w=>new Date(w.date+'T00:00:00')>=start); const use=recent.length?recent:workouts; const vol={}; use.forEach(w=>w.exercises.forEach(ex=>ex.sets.forEach(s=>{ vol[ex.muscle]=(vol[ex.muscle]||0)+setVolume(s); }))); return { vol, fellBack:recent.length===0&&workouts.length>0 }; }
+function exerciseTrend(workouts,name){ const pts=[]; [...workouts].sort((a,b)=>a.date<b.date?-1:1).forEach(w=>{ const ex=w.exercises.find(e=>e.name===name); if(ex){ const top=Math.max(0,...ex.sets.map(s=>Number(s.w)||0)); pts.push({date:w.date,w:top}); } }); return pts; }
+const fmtDur = (sec)=>{ const m=Math.floor(sec/60),s=sec%60; return `${m}:${String(s).padStart(2,'0')}`; };
+
+/* Navy body-fat estimate (men, metric) */
+function navyBodyFat({waist, neck, height}){
+  const W=Number(waist)||0, N=Number(neck)||0, H=Number(height)||0;
+  if (W<=N || W<=0 || N<=0 || H<=0) return null;
+  const bf = 495/(1.0324 - 0.19077*Math.log10(W-N) + 0.15456*Math.log10(H)) - 450;
+  if (!isFinite(bf) || bf<=0 || bf>60) return null;
+  return Math.round(bf*10)/10;
+}
+
+/* =========================================================================
+   GOAL PROGRESS
+   ========================================================================= */
+function goalProgress(goal, state){
+  const today = todayISO();
+  if (goal.auto==='gym') return { value: thisWeekCount(state.workouts), target: goal.target, period:'deze week' };
+  if (goal.cadence==='daily'){
+    const v = (state.dayLog[today]||{})[goal.id];
+    const value = goal.metric==='count' ? (v?1:0) : (Number(v)||0);
+    return { value, target: goal.target, period:'vandaag' };
+  }
+  if (goal.cadence==='weekly'){
+    const ws = startOfWeek(new Date()); let c=0;
+    Object.entries(state.dayLog).forEach(([d,obj])=>{ if(new Date(d+'T00:00:00')>=ws && obj[goal.id]) c++; });
+    return { value:c, target:goal.target, period:'deze week' };
+  }
+  if (goal.cadence==='monthly'){
+    const v = (state.monthLog[monthKey(today)]||{})[goal.id];
+    return { value:Number(v)||0, target:goal.target, period:'deze maand' };
+  }
+  return { value:0, target:goal.target, period:'' };
+}
+const goalColor = (goal) => goal.color || AREAS[goal.area]?.color || '#37c0ff';
+
+/* =========================================================================
+   UI ATOMS
+   ========================================================================= */
+function Ring({ pct, size=92, stroke=9, color='#37c0ff', track='#202a3a', children }){
+  const r=(size-stroke)/2, c=2*Math.PI*r;
+  const off = c*(1-Math.min(1,Math.max(0,pct||0)));
+  return (
+    <div className="relative" style={{width:size,height:size}}>
+      <svg width={size} height={size} className="block" style={{transform:'rotate(-90deg)'}}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={track} strokeWidth={stroke}/>
+        <circle className="ring-fg" cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeLinecap="round" strokeDasharray={c} strokeDashoffset={off}/>
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">{children}</div>
+    </div>
+  );
+}
+function StatBox({ label, value, sub, accent }){
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4 flex-1 min-w-0">
+      <div className="font-display text-4xl sm:text-5xl font-800 leading-none" style={{color:accent||'#fff'}}>{value}</div>
+      <div className="font-display tracking-widest text-[11px] text-slate-400 uppercase mt-2">{label}</div>
+      {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+function MusclePill({ muscle }){ const c=MUSCLE_COLORS[muscle]||'#64748b'; return <span className="text-[10px] font-700 font-display tracking-wider uppercase px-2 py-0.5 rounded" style={{color:c,background:`${c}1f`}}>{muscle}</span>; }
+function Check({ on, onClick, onContext, small }){
+  const size = small?'w-6 h-6':'w-9 h-9';
+  return (
+    <button onClick={onClick} onContextMenu={(e)=>{ if(onContext){e.preventDefault();onContext();} }}
+      className={`${size} rounded-lg border flex items-center justify-center transition active:scale-90 ${on?'bg-emerald-500 border-emerald-400':'bg-ink border-line'}`}>
+      {on && <svg viewBox="0 0 24 24" className={small?'w-4 h-4':'w-5 h-5'} fill="none" stroke="white" strokeWidth="3"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+    </button>
+  );
+}
+function Section({ title, tag, color, children }){
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-display text-lg font-700" style={{color}}>{title}</div>
+        {tag && <span className="text-[10px] font-display uppercase tracking-widest px-2 py-0.5 rounded" style={{color,background:`${color}1f`}}>{tag}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* =========================================================================
+   DOELENDASHBOARD (home)
+   ========================================================================= */
+function GoalsScreen({ state, onAddGoal, onDeleteGoal, goTo }){
+  const [adding, setAdding] = useState(false);
+  const goals = state.goals;
+  const overall = useMemo(()=>{
+    if (!goals.length) return 0;
+    const ps = goals.map(g=>{ const {value,target}=goalProgress(g,state); return Math.min(1, target? value/target : 0); });
+    return ps.reduce((a,b)=>a+b,0)/ps.length;
+  }, [state]);
+
+  const byArea = Object.keys(AREAS).map(key => ({ key, ...AREAS[key], goals: goals.filter(g=>g.area===key) }));
+  const greet = (()=>{ const h=new Date().getHours(); return h<6?'Goedenacht':h<12?'Goedemorgen':h<18?'Goedemiddag':'Goedenavond'; })();
+
+  return (
+    <div className="space-y-5">
+      {/* hero */}
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow flex items-center gap-5">
+        <Ring pct={overall} size={104} stroke={11} color="#37c0ff">
+          <div className="font-display text-3xl font-900 leading-none">{Math.round(overall*100)}<span className="text-base">%</span></div>
+          <div className="text-[8px] uppercase tracking-widest text-slate-400 font-display mt-0.5">doelen</div>
+        </Ring>
+        <div className="min-w-0">
+          <div className="font-display tracking-widest text-electric2 text-xs uppercase">{greet}, Justin</div>
+          <h1 className="font-display text-3xl font-900 leading-tight mt-0.5">DOELEN&shy;DASHBOARD</h1>
+          <button onClick={()=>goTo('vandaag')} className="mt-2 inline-flex items-center gap-1 text-[11px] font-display uppercase tracking-widest text-slate-900 bg-electric2 rounded-lg px-3 py-1.5 font-800 active:scale-95">Naar vandaag →</button>
+        </div>
+      </div>
+
+      {/* areas */}
+      {byArea.map(area => (
+        <div key={area.key}>
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full" style={{background:area.color}}></span>
+              <div className="font-display tracking-widest text-slate-300 text-xs uppercase">{area.label}</div>
+            </div>
+            <button onClick={()=>setAdding(area.key)} className="text-slate-500 hover:text-electric2 text-lg leading-none px-1">＋</button>
+          </div>
+          {area.goals.length===0 ? (
+            <button onClick={()=>setAdding(area.key)} className="w-full border border-dashed border-line hover:border-electric/50 rounded-2xl py-5 text-slate-500 text-sm active:scale-[.99] transition">
+              Nog geen doel — tik om er één toe te voegen
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {area.goals.map(g => <GoalCard key={g.id} goal={g} state={state} onDelete={onDeleteGoal} />)}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {adding && <GoalSheet area={adding} onClose={()=>setAdding(false)} onSave={(g)=>{ onAddGoal(g); setAdding(false); }} />}
+    </div>
+  );
+}
+
+function GoalCard({ goal, state, onDelete }){
+  const { value, target, period } = goalProgress(goal, state);
+  const pct = target ? value/target : 0;
+  const c = goalColor(goal);
+  const done = pct>=1;
+  const valLabel = goal.unit==='€' ? `€${nfmt(Math.round(value))}` : `${value%1?value.toFixed(1):value}${goal.unit?goal.unit:''}`;
+  const tgtLabel = goal.unit==='€' ? `€${nfmt(target)}` : `${target}${goal.unit||''}`;
+  return (
+    <div className="relative bg-card border border-line rounded-2xl p-3.5 flex flex-col items-center"
+      onContextMenu={(e)=>{ e.preventDefault(); if(confirm(`Doel "${goal.name}" verwijderen?`)) onDelete(goal.id); }}>
+      <div className="absolute top-2 left-3 text-lg">{goal.icon}</div>
+      {done && <div className="absolute top-2 right-3 text-emerald-400 text-sm">✓</div>}
+      <Ring pct={pct} size={86} stroke={8} color={done?'#34d399':c}>
+        <div className="font-display text-lg font-900 leading-none">{valLabel}</div>
+        <div className="text-[9px] text-slate-500 leading-none mt-0.5">/ {tgtLabel}</div>
+      </Ring>
+      <div className="font-display text-sm font-700 mt-2 text-center leading-tight">{goal.name}</div>
+      <div className="text-[9px] uppercase tracking-widest text-slate-500 font-display">{period}</div>
+    </div>
+  );
+}
+
+function GoalSheet({ area, onClose, onSave }){
+  const [f, setF] = useState({ name:'', icon:'🎯', cadence:'daily', metric:'value', target:'', unit:'' });
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const save=()=>{ if(!f.name.trim()||!f.target) return; onSave({ id:slug(f.name)+'-'+Date.now().toString(36), area, name:f.name.trim(), icon:f.icon||'🎯', cadence:f.cadence, metric:f.metric, target:Number(f.target), unit:f.unit.trim() }); };
+  const Field=({label,children})=> <div><div className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-1">{label}</div>{children}</div>;
+  const inp="w-full bg-ink border border-line focus:border-electric rounded-lg px-3 py-2 outline-none text-slate-100";
+  return (
+    <div className="fixed inset-0 z-40 flex items-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60"></div>
+      <div onClick={e=>e.stopPropagation()} className="relative w-full max-w-xl mx-auto bg-panel border-t border-line rounded-t-3xl p-5 sheet-in max-h-[85vh] overflow-y-auto">
+        <div className="w-12 h-1.5 bg-line rounded-full mx-auto mb-4"></div>
+        <div className="font-display text-xl font-800 mb-1">NIEUW DOEL</div>
+        <div className="text-xs text-slate-400 mb-4">{AREAS[area].label}</div>
+        <div className="space-y-3">
+          <div className="flex gap-3">
+            <div className="w-16"><Field label="Icoon"><input className={inp+' text-center text-xl'} value={f.icon} onChange={e=>set('icon',e.target.value)} maxLength={2}/></Field></div>
+            <div className="flex-1"><Field label="Naam"><input className={inp} placeholder="bv. 8 glazen water" value={f.name} onChange={e=>set('name',e.target.value)}/></Field></div>
+          </div>
+          <Field label="Frequentie">
+            <div className="grid grid-cols-3 gap-2">
+              {[['daily','Dagelijks'],['weekly','Per week'],['monthly','Per maand']].map(([v,l])=>(
+                <button key={v} onClick={()=>set('cadence',v)} className={`rounded-lg py-2 text-sm font-display uppercase tracking-wider ${f.cadence===v?'bg-electric text-white':'bg-ink border border-line text-slate-400'}`}>{l}</button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Type">
+            <div className="grid grid-cols-2 gap-2">
+              {[['value','Waarde halen'],['count','Afvinken / tellen']].map(([v,l])=>(
+                <button key={v} onClick={()=>set('metric',v)} className={`rounded-lg py-2 text-sm font-display uppercase tracking-wider ${f.metric===v?'bg-electric text-white':'bg-ink border border-line text-slate-400'}`}>{l}</button>
+              ))}
+            </div>
+          </Field>
+          <div className="flex gap-3">
+            <div className="flex-1"><Field label="Streefwaarde"><input type="number" inputMode="decimal" className={inp} placeholder="bv. 10000" value={f.target} onChange={e=>set('target',e.target.value)}/></Field></div>
+            <div className="w-28"><Field label="Eenheid"><input className={inp} placeholder="€ / u / x" value={f.unit} onChange={e=>set('unit',e.target.value)}/></Field></div>
+          </div>
+          <button onClick={save} className="w-full bg-electric text-white rounded-2xl py-3.5 font-display tracking-widest uppercase font-800 glow active:scale-95 mt-1">Doel opslaan</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   VANDAAG
+   ========================================================================= */
+function TodayScreen({ state, setDayValue, toggleDay, addMonth, goTo }){
+  const today = todayISO();
+  const dayLog = state.dayLog[today] || {};
+  const dailyGoals = state.goals.filter(g=>g.cadence==='daily');
+  const weeklyGoals = state.goals.filter(g=>g.cadence==='weekly');
+  const monthlyGoals = state.goals.filter(g=>g.cadence==='monthly');
+
+  // consistency = avg completion of today's daily goals (capped at 1 each)
+  const consistency = useMemo(()=>{
+    if (!dailyGoals.length) return 0;
+    const ps = dailyGoals.map(g=>{ const {value,target}=goalProgress(g,state); return Math.min(1, target? value/target:0); });
+    return ps.reduce((a,b)=>a+b,0)/ps.length;
+  }, [state]);
+
+  const doneCount = dailyGoals.filter(g=>{ const {value,target}=goalProgress(g,state); return value>=target; }).length;
+
+  return (
+    <div className="space-y-5">
+      {/* consistency ring */}
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow flex items-center gap-5">
+        <Ring pct={consistency} size={104} stroke={11} color={consistency>=1?'#34d399':'#37c0ff'}>
+          <div className="font-display text-3xl font-900 leading-none">{Math.round(consistency*100)}<span className="text-base">%</span></div>
+          <div className="text-[8px] uppercase tracking-widest text-slate-400 font-display mt-0.5">consistentie</div>
+        </Ring>
+        <div className="min-w-0">
+          <div className="font-display tracking-widest text-electric2 text-xs uppercase">{fmtDate(today)}</div>
+          <h1 className="font-display text-3xl font-900 leading-tight mt-0.5">VANDAAG</h1>
+          <div className="text-sm text-slate-400 mt-1">{doneCount}/{dailyGoals.length} dagdoelen gehaald</div>
+        </div>
+      </div>
+
+      {/* daily actions */}
+      {dailyGoals.length>0 && <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Dagelijkse acties</div>
+        <div className="space-y-2">
+          {dailyGoals.map(g=>{
+            const c = goalColor(g);
+            if (g.metric==='count'){
+              const on = !!dayLog[g.id];
+              return (
+                <button key={g.id} onClick={()=>toggleDay(g.id)} className={`w-full flex items-center gap-3 rounded-2xl p-3.5 border transition active:scale-[.99] text-left ${on?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                  <span className="text-2xl">{g.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-700">{actionText(g)}</div>
+                    <div className="text-[11px] text-slate-500">{AREAS[g.area].short}</div>
+                  </div>
+                  <Check on={on} onClick={()=>toggleDay(g.id)} />
+                </button>
+              );
+            }
+            const val = dayLog[g.id] ?? '';
+            const cur = Number(val)||0; const pct = g.target? cur/g.target : 0; const hit = cur>=g.target;
+            return (
+              <div key={g.id} className={`flex items-center gap-3 rounded-2xl p-3.5 border ${hit?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                <span className="text-2xl">{g.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-700">{actionText(g)}</div>
+                  <div className="h-1.5 bg-ink rounded-full overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${Math.min(100,pct*100)}%`,background:hit?'#34d399':c}}></div></div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input type="number" inputMode="decimal" value={val} placeholder="0"
+                    onChange={e=>setDayValue(g.id, e.target.value)}
+                    className={`w-16 bg-ink border ${hit?'border-emerald-500/40 text-emerald-300':'border-line'} rounded-lg px-2 py-2 text-center font-display text-lg font-700 outline-none focus:border-electric`}/>
+                  <span className="text-[11px] text-slate-500 w-8">{g.unit||''}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>}
+
+      {/* weekly */}
+      {weeklyGoals.length>0 && <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Deze week</div>
+        <div className="space-y-2">
+          {weeklyGoals.map(g=>{
+            const { value, target } = goalProgress(g,state); const hit=value>=target; const c=goalColor(g);
+            const didToday = !!dayLog[g.id];
+            return (
+              <div key={g.id} className={`flex items-center gap-3 rounded-2xl p-3.5 border ${hit?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                <span className="text-2xl">{g.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-700">{g.name} <span className="text-slate-500 text-sm font-400">· {value}/{target} {g.unit||'x'}</span></div>
+                  <div className="flex gap-1 mt-1.5">{Array.from({length:target}).map((_,i)=><span key={i} className="h-1.5 flex-1 rounded-full" style={{background:i<value?(hit?'#34d399':c):'#202a3a'}}></span>)}</div>
+                </div>
+                {g.auto==='gym'
+                  ? <button onClick={()=>goTo('fitness')} className="text-[10px] font-display uppercase tracking-widest text-electric2 border border-electric/40 rounded-lg px-3 py-2 active:scale-95">Start</button>
+                  : <button onClick={()=>toggleDay(g.id)} className={`text-[10px] font-display uppercase tracking-widest rounded-lg px-3 py-2 active:scale-95 ${didToday?'bg-emerald-500 text-white':'border border-line text-slate-300'}`}>{didToday?'✓ vandaag':'+ vandaag'}</button>}
+              </div>
+            );
+          })}
+        </div>
+      </div>}
+
+      {/* monthly */}
+      {monthlyGoals.length>0 && <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Deze maand</div>
+        <div className="space-y-2">
+          {monthlyGoals.map(g=>{
+            const { value, target } = goalProgress(g,state); const hit=value>=target; const c=goalColor(g);
+            return (
+              <div key={g.id} className={`rounded-2xl p-3.5 border ${hit?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{g.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-700">{g.name} <span className="text-slate-500 text-sm font-400">· {g.unit==='€'?'€'+nfmt(value):value} / {g.unit==='€'?'€'+nfmt(target):target}</span></div>
+                    <div className="h-1.5 bg-ink rounded-full overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${Math.min(100,(target?value/target:0)*100)}%`,background:hit?'#34d399':c}}></div></div>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-2.5">
+                  {[25,50,100].map(a=><button key={a} onClick={()=>addMonth(g.id,a)} className="flex-1 bg-ink border border-line rounded-lg py-2 text-sm font-display font-700 text-slate-300 active:scale-95">+{g.unit==='€'?'€':''}{a}</button>)}
+                  <button onClick={()=>{ const v=prompt('Bedrag toevoegen:'); if(v) addMonth(g.id, Number(v)||0); }} className="flex-1 bg-electric/10 border border-electric/40 rounded-lg py-2 text-sm font-display font-700 text-electric2 active:scale-95">anders</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>}
+
+      <div className="text-[10px] text-slate-500 text-center px-6">Tip: lang ingedrukt houden op een doel-kaartje (Doelen-tab) om het te verwijderen. Energie & stemming log je op de Lichaam-tab.</div>
+    </div>
+  );
+}
+function actionText(g){
+  if (g.id==='stappen') return `${nfmt(g.target)} stappen lopen`;
+  if (g.id==='slaap') return `${g.target} uur slapen`;
+  if (g.id==='meditatie') return 'Mediteren · 15 min';
+  if (g.metric==='count') return g.name;
+  return `${g.name} · ${nfmt(g.target)}${g.unit||''}`;
+}
+
+/* =========================================================================
+   LICHAAM (metrics)
+   ========================================================================= */
+function BodyScreen({ state, saveMetric, setMood }){
+  const today = todayISO();
+  const m = state.metrics[today] || {};
+  const entries = Object.entries(state.metrics).filter(([,v])=>v.weight!=null && v.weight!=='').sort((a,b)=>a[0]<b[0]?-1:1);
+  const latestWeight = entries.length? entries[entries.length-1][1].weight : state.profile.current;
+  const bf = navyBodyFat({ waist:m.waist, neck:m.neck, height:PROFILE.height });
+  const wpts = entries.slice(-12).map(([d,v])=>({date:d, w:Number(v.weight)}));
+
+  const NumField = ({k, label, unit, ph, step}) => (
+    <div className="bg-card border border-line rounded-xl p-3">
+      <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display mb-1">{label}</div>
+      <div className="flex items-baseline gap-1">
+        <input type="number" inputMode="decimal" step={step||'1'} value={m[k] ?? ''} placeholder={ph||'—'}
+          onChange={e=>saveMetric(today, k, e.target.value)}
+          className="w-full bg-transparent font-display text-2xl font-800 outline-none text-slate-100"/>
+        <span className="text-xs text-slate-500">{unit}</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <h1 className="font-display text-3xl font-900">LICHAAM</h1>
+
+      {/* hero stats */}
+      <div className="flex gap-3">
+        <StatBox label="Gewicht" value={latestWeight?`${latestWeight}`:'—'} sub="kg · laatste" accent="#37c0ff" />
+        <StatBox label="Vet %" value={bf!=null?`${bf}`:'—'} sub={bf!=null?'geschat (tape)':'vul taille+hals'} accent="#a78bfa" />
+        <StatBox label="Doel" value={state.profile.goal} sub="kg" />
+      </div>
+
+      {/* weight trend */}
+      {wpts.length>=2 && <div className="bg-card border border-line rounded-2xl p-4">
+        <div className="font-display text-lg font-700 mb-2">Gewicht trend</div>
+        <WeightSpark pts={wpts} />
+      </div>}
+
+      {/* today input */}
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Meting vandaag</div>
+        <div className="grid grid-cols-2 gap-3">
+          <NumField k="weight" label="Gewicht" unit="kg" step="0.1" ph="bv. 93" />
+          <NumField k="waist" label="Taille" unit="cm" ph="bv. 84" />
+          <NumField k="neck" label="Hals" unit="cm" ph="bv. 39" />
+          <NumField k="sleep" label="Slaap (nacht)" unit="u" step="0.1" ph="bv. 7.5" />
+          <NumField k="restHR" label="Rusthartslag" unit="bpm" ph="bv. 58" />
+          <NumField k="thigh" label="Dij (optioneel)" unit="cm" ph="—" />
+        </div>
+        <div className="text-[11px] text-slate-500 mt-2 leading-relaxed">Taille + hals + je lengte (191 cm) → automatische vet%-schatting via de Navy-methode. Geen weegschaal nodig.</div>
+      </div>
+
+      {/* mood + energy */}
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Hoe voel je je?</div>
+        <div className="space-y-2.5">
+          <MoodRow label="Stemming" icon="🙂" value={m.mood} onSet={(v)=>setMood(today,'mood',v)} />
+          <MoodRow label="Energie" icon="⚡" value={m.energy} onSet={(v)=>setMood(today,'energy',v)} />
+        </div>
+        <div className="text-[11px] text-slate-500 mt-2 leading-relaxed">Snelle score van 1–5. Na een paar weken laat het dashboard verbanden zien (bv. meer slaap ↔ meer energie).</div>
+      </div>
+
+      <div className="bg-card border border-line rounded-2xl p-4 flex items-center gap-3">
+        <span className="text-2xl">📸</span>
+        <div className="text-[12px] text-slate-400 leading-snug">Voortgangsfoto's (wekelijks, zelfde licht/houding) zijn het eerlijkste signaal. Foto-opslag komt in een latere fase — maak ze nu vast los met je telefoon.</div>
+      </div>
+    </div>
+  );
+}
+function MoodRow({ label, icon, value, onSet }){
+  return (
+    <div className="bg-card border border-line rounded-2xl p-3.5 flex items-center gap-3">
+      <span className="text-xl">{icon}</span>
+      <div className="font-700 w-20">{label}</div>
+      <div className="flex gap-1.5 ml-auto">
+        {[1,2,3,4,5].map(n=>(
+          <button key={n} onClick={()=>onSet(n)}
+            className={`w-9 h-9 rounded-lg font-display font-800 text-sm transition active:scale-90 ${value===n?'bg-electric text-white':'bg-ink border border-line text-slate-400'}`}>{n}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+function WeightSpark({ pts }){
+  const W=300,H=70,pad=8; const ws=pts.map(p=>p.w); const min=Math.min(...ws),max=Math.max(...ws); const range=max-min||1;
+  const stepX = pts.length>1?(W-pad*2)/(pts.length-1):0;
+  const coords = pts.map((p,i)=>[pad+i*stepX, H-pad-((p.w-min)/range)*(H-pad*2)]);
+  const path = coords.map((c,i)=>(i===0?'M':'L')+c[0].toFixed(1)+' '+c[1].toFixed(1)).join(' ');
+  const area = path+` L ${coords[coords.length-1][0].toFixed(1)} ${H-pad} L ${coords[0][0].toFixed(1)} ${H-pad} Z`;
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height:H}}>
+        <defs><linearGradient id="wg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#37c0ff" stopOpacity="0.35"/><stop offset="100%" stopColor="#37c0ff" stopOpacity="0"/></linearGradient></defs>
+        <path d={area} fill="url(#wg)"/><path d={path} fill="none" stroke="#37c0ff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {coords.map((c,i)=><circle key={i} cx={c[0]} cy={c[1]} r="2.5" fill="#37c0ff"/>)}
+      </svg>
+      <div className="flex justify-between text-[10px] text-slate-500 mt-1"><span>{fmtDate(pts[0].date)}</span><span>{pts[pts.length-1].w} kg</span><span>{fmtDate(pts[pts.length-1].date)}</span></div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   FITNESS MODULE (ported tracker, nested)
+   ========================================================================= */
+function FitDashboard({ workouts, prs, profile, setProfile, onStart }){
+  const week = thisWeekCount(workouts); const total = workouts.length;
+  const topPRs = Object.entries(prs).sort((a,b)=>b[1].w-a[1].w).slice(0,3);
+  const [editGoal,setEditGoal]=useState(false),[editCur,setEditCur]=useState(false);
+  const t = computeTargets(profile.current);
+  return (
+    <div className="space-y-5">
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow">
+        <div className="font-display tracking-widest text-electric2 text-xs uppercase">Lean Bulk · {profile.timeline}</div>
+        <h1 className="font-display text-3xl font-800 mt-1">FITNESS</h1>
+        <div className="flex items-center gap-6 mt-4">
+          <div onClick={()=>setEditCur(v=>!v)} className="cursor-pointer">
+            {editCur ? <input autoFocus type="number" value={profile.current} onChange={e=>setProfile({...profile,current:Number(e.target.value)})} onBlur={()=>setEditCur(false)} className="w-20 bg-ink border border-electric rounded-lg px-2 py-1 font-display text-2xl outline-none"/> : <div className="font-display text-2xl font-700">{profile.current}<span className="text-base text-slate-400"> kg</span></div>}
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">Nu · tik om te wijzigen</div>
+          </div>
+          <div className="text-electric font-display text-2xl">→</div>
+          <div onClick={()=>setEditGoal(v=>!v)} className="cursor-pointer">
+            {editGoal ? <input autoFocus type="number" value={profile.goal} onChange={e=>setProfile({...profile,goal:Number(e.target.value)})} onBlur={()=>setEditGoal(false)} className="w-20 bg-ink border border-electric rounded-lg px-2 py-1 font-display text-2xl text-electric2 outline-none"/> : <div className="font-display text-2xl font-700 text-electric2">{profile.goal}<span className="text-base text-slate-400"> kg</span></div>}
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">Doel · tik om te wijzigen</div>
+          </div>
+        </div>
+        <div className="mt-4 pt-3 border-t border-line flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+          <span className="font-display uppercase tracking-widest text-[10px] text-slate-500">Dagelijkse fuel</span>
+          <span className="font-700 text-slate-200">{t.kcal.toLocaleString()} kcal</span>
+          <span className="text-electric2 font-700">{t.protein}g eiwit</span>
+        </div>
+      </div>
+      <div className="flex gap-3">
+        <StatBox label="Deze week" value={`${week}/6`} sub="sessies" accent="#37c0ff" />
+        <StatBox label="Totaal" value={total} sub="workouts" />
+        <StatBox label="PR's" value={Object.keys(prs).length} sub="oefeningen" />
+      </div>
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Start een sessie</div>
+        <div className="grid grid-cols-2 gap-3">
+          {PLAN.map(d=>(
+            <button key={d.id} onClick={()=>onStart(d)} className="text-left bg-card hover:bg-line border border-line rounded-2xl p-4 transition active:scale-95">
+              <div className="font-display tracking-widest text-electric2 text-[11px] uppercase">{d.label}</div>
+              <div className="font-display text-xl font-700 leading-tight mt-1">{d.name.split('·')[0]}</div>
+              <div className="text-[11px] text-slate-400 mt-1">{d.name.split('·')[1]} · {d.exercises.length} oefeningen</div>
+            </button>
+          ))}
+        </div>
+      </div>
+      {topPRs.length>0 && <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Top PR's</div>
+        <div className="space-y-2">
+          {topPRs.map(([name,pr],i)=>(
+            <div key={name} className="flex items-center gap-3 bg-card border border-line rounded-xl p-3">
+              <div className="text-2xl">{['🥇','🥈','🥉'][i]}</div>
+              <div className="flex-1 min-w-0"><div className="font-700 truncate">{name}</div><div className="flex items-center gap-2 mt-0.5"><MusclePill muscle={pr.muscle}/><span className="text-[11px] text-slate-500">{fmtDate(pr.date)}</span></div></div>
+              <div className="text-right"><div className="font-display text-2xl font-800 text-electric2">{pr.w}<span className="text-sm text-slate-400">kg</span></div><div className="text-[11px] text-slate-500">× {pr.r} reps</div></div>
+            </div>
+          ))}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+const WARMUP = ['5 min rustig cardio (fiets / stevig wandelen)','Armcirkels × 15 elke kant','Beenzwaaien × 10 per been','Bodyweight squats × 15','Band pull-aparts × 20'];
+const COOLDOWN = ['Borst-deurstretch · 30s/zijde','Lat hang / reik omhoog · 30s','Heupbuiger stretch · 30s/zijde','Hamstring stretch · 30s/zijde','3 min rustig ademen'];
+function lastSession(workouts, exName){ const sorted=[...workouts].sort((a,b)=>a.date<b.date?1:-1); for(const w of sorted){ const ex=w.exercises.find(e=>e.name===exName); if(ex) return ex.sets; } return null; }
+
+function WorkoutScreen({ active, setActive, workouts, onFinish, onDiscard, onStartPick }){
+  const [elapsed,setElapsed]=useState(0),[pickerOpen,setPickerOpen]=useState(false),[warmDone,setWarmDone]=useState({}),[coolDone,setCoolDone]=useState({});
+  useEffect(()=>{ if(!active) return; const t=setInterval(()=>setElapsed(Math.floor((Date.now()-active.startTime)/1000)),1000); return ()=>clearInterval(t); },[active]);
+  if(!active) return (
+    <div className="space-y-5">
+      <div className="flex flex-col items-center justify-center text-center py-10 px-6">
+        <div className="text-5xl mb-4">🏋️</div>
+        <div className="font-display text-2xl font-800">GEEN ACTIEVE SESSIE</div>
+        <p className="text-slate-400 text-sm mt-2 max-w-xs">Kies hieronder een trainingsdag om te starten.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {PLAN.map(d=><button key={d.id} onClick={()=>onStartPick(d)} className="text-left bg-card hover:bg-line border border-line rounded-2xl p-4 transition active:scale-95"><div className="font-display tracking-widest text-electric2 text-[11px] uppercase">{d.label}</div><div className="font-display text-xl font-700 leading-tight mt-1">{d.name.split('·')[0]}</div><div className="text-[11px] text-slate-400 mt-1">{d.name.split('·')[1]} · {d.exercises.length} oefeningen</div></button>)}
+      </div>
+    </div>
+  );
+  const update=(fn)=>setActive(prev=>{ const next=structuredClone(prev); fn(next); return next; });
+  const setCell=(ei,si,key,val)=>update(a=>{ a.exercises[ei].sets[si][key]=val; });
+  const toggleDone=(ei,si)=>update(a=>{ a.exercises[ei].sets[si].done=!a.exercises[ei].sets[si].done; });
+  const addSet=(ei)=>update(a=>{ const s=a.exercises[ei].sets; const last=s[s.length-1]; s.push({w:last?last.w:'',r:'',done:false}); });
+  const removeSet=(ei,si)=>update(a=>{ if(a.exercises[ei].sets.length>1) a.exercises[ei].sets.splice(si,1); });
+  const addExercise=(lib)=>{ update(a=>{ a.exercises.push({name:lib.name,muscle:lib.muscle,sets:[{w:'',r:'',done:false}]}); }); setPickerOpen(false); };
+  const totalSets=active.exercises.reduce((n,e)=>n+e.sets.length,0); const doneSets=active.exercises.reduce((n,e)=>n+e.sets.filter(s=>s.done).length,0);
+  return (
+    <div className="space-y-4 pb-2">
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-4 sticky top-0 z-20 glow">
+        <div className="flex items-center justify-between">
+          <div><div className="font-display tracking-widest text-electric2 text-[11px] uppercase">{fmtDate(active.date)}</div><div className="font-display text-2xl font-800 leading-tight">{active.name}</div></div>
+          <div className="text-right"><div className="font-display text-3xl font-800 text-electric2 tabular-nums">{fmtDur(elapsed)}</div><div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">{doneSets}/{totalSets} sets</div></div>
+        </div>
+      </div>
+      <Section title="Warming-up" tag="5 min" color="#facc15">{WARMUP.map((w,i)=><label key={i} className="flex items-center gap-3 py-1.5 cursor-pointer"><Check on={!!warmDone[i]} onClick={()=>setWarmDone(p=>({...p,[i]:!p[i]}))} small/><span className={`text-sm ${warmDone[i]?'text-slate-500 line-through':'text-slate-200'}`}>{w}</span></label>)}</Section>
+      {active.exercises.map((ex,ei)=>{ const prev=lastSession(workouts,ex.name); return (
+        <div key={ei} className="bg-card border border-line rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3"><div className="font-display text-xl font-700">{ex.name}</div><MusclePill muscle={ex.muscle}/></div>
+          <div className="grid grid-cols-[28px_1fr_1fr_1fr_40px] gap-2 items-center text-[10px] uppercase tracking-widest text-slate-500 font-display mb-1 px-1"><div>Set</div><div>Vorig</div><div>Kg</div><div>Reps</div><div></div></div>
+          {ex.sets.map((s,si)=>{ const p=prev&&prev[si]?`${prev[si].w||0}×${prev[si].r||0}`:'—'; return (
+            <div key={si} className={`grid grid-cols-[28px_1fr_1fr_1fr_40px] gap-2 items-center mb-1.5 rounded-xl px-1 py-1 ${s.done?'bg-emerald-500/10':''}`}>
+              <div className="font-display font-700 text-slate-300 text-center">{si+1}</div>
+              <div className="text-[12px] text-slate-500 tabular-nums">{p}</div>
+              <input type="number" inputMode="decimal" value={s.w} placeholder="0" onChange={e=>setCell(ei,si,'w',e.target.value)} className={`w-full bg-ink border ${s.done?'border-emerald-500/40 text-emerald-300':'border-line'} rounded-lg px-2 py-2 text-center font-display text-lg font-700 outline-none focus:border-electric`}/>
+              <input type="number" inputMode="numeric" value={s.r} placeholder="0" onChange={e=>setCell(ei,si,'r',e.target.value)} className={`w-full bg-ink border ${s.done?'border-emerald-500/40 text-emerald-300':'border-line'} rounded-lg px-2 py-2 text-center font-display text-lg font-700 outline-none focus:border-electric`}/>
+              <div className="flex justify-center"><Check on={s.done} onClick={()=>toggleDone(ei,si)} onContext={()=>removeSet(ei,si)}/></div>
+            </div>
+          );})}
+          <button onClick={()=>addSet(ei)} className="w-full mt-2 border border-dashed border-line hover:border-electric text-slate-400 hover:text-electric2 rounded-lg py-2 font-display tracking-widest text-xs uppercase transition">+ Set toevoegen</button>
+        </div>
+      );})}
+      <button onClick={()=>setPickerOpen(true)} className="w-full bg-electric/10 border border-electric/40 text-electric2 rounded-2xl py-3 font-display tracking-widest text-sm uppercase font-700 active:scale-95 transition">+ Oefening toevoegen</button>
+      <Section title="Cooling-down" tag="stretch" color="#34d399">{COOLDOWN.map((w,i)=><label key={i} className="flex items-center gap-3 py-1.5 cursor-pointer"><Check on={!!coolDone[i]} onClick={()=>setCoolDone(p=>({...p,[i]:!p[i]}))} small/><span className={`text-sm ${coolDone[i]?'text-slate-500 line-through':'text-slate-200'}`}>{w}</span></label>)}</Section>
+      <div className="flex gap-3 pt-1">
+        <button onClick={onDiscard} className="flex-1 border border-line text-slate-400 rounded-2xl py-3.5 font-display tracking-widest uppercase font-700 active:scale-95">Annuleren</button>
+        <button onClick={()=>onFinish(elapsed)} className="flex-[2] bg-electric text-white rounded-2xl py-3.5 font-display tracking-widest uppercase font-800 glow active:scale-95">Workout afronden</button>
+      </div>
+      {pickerOpen && <div className="fixed inset-0 z-40 flex items-end" onClick={()=>setPickerOpen(false)}><div className="absolute inset-0 bg-black/60"></div><div onClick={e=>e.stopPropagation()} className="relative w-full max-w-xl mx-auto bg-panel border-t border-line rounded-t-3xl p-5 sheet-in max-h-[70vh] overflow-y-auto"><div className="w-12 h-1.5 bg-line rounded-full mx-auto mb-4"></div><div className="font-display text-xl font-800 mb-3">OEFENING TOEVOEGEN</div><div className="grid grid-cols-1 gap-2">{EXERCISE_LIBRARY.map(lib=><button key={lib.name} onClick={()=>addExercise(lib)} className="flex items-center justify-between bg-card hover:bg-line border border-line rounded-xl px-4 py-3 transition text-left"><span className="font-600">{lib.name}</span><MusclePill muscle={lib.muscle}/></button>)}</div></div></div>}
+    </div>
+  );
+}
+
+function History({ workouts }){
+  const sorted=workouts.map((w,i)=>({w,i})).sort((a,b)=>a.w.date<b.w.date?1:-1);
+  return (
+    <div className="space-y-4">
+      <h1 className="font-display text-3xl font-800">HISTORY</h1>
+      {sorted.length===0 && <div className="text-slate-500 text-sm">Nog geen workouts gelogd.</div>}
+      {sorted.map(({w,i})=>{ const prHits=sessionPRs(workouts,i); const totalSets=w.exercises.reduce((n,e)=>n+e.sets.length,0); return (
+        <div key={w.id} className="bg-card border border-line rounded-2xl p-4">
+          <div className="flex items-start justify-between"><div><div className="font-display text-xl font-800 leading-tight">{w.name}</div><div className="text-[12px] text-slate-400 mt-0.5">{fmtDate(w.date)}</div></div>{prHits.length>0 && <span className="flex items-center gap-1 text-[11px] font-display uppercase tracking-widest text-yellow-300 bg-yellow-400/10 px-2 py-1 rounded-lg">🏆 {prHits.length} PR{prHits.length>1?'s':''}</span>}</div>
+          <div className="flex gap-4 mt-3 text-[11px] uppercase tracking-widest font-display text-slate-400"><span>⏱ {fmtDur(w.durationSec)}</span><span>· {totalSets} sets</span><span>· {w.exercises.length} oefeningen</span></div>
+          <div className="flex flex-wrap gap-2 mt-3">{w.exercises.map((ex,k)=>{ const isPR=prHits.includes(ex.name); const c=MUSCLE_COLORS[ex.muscle]||'#64748b'; return <span key={k} className="text-[11px] font-600 px-2.5 py-1 rounded-lg flex items-center gap-1" style={{color:isPR?'#fde047':c,background:isPR?'#facc1518':`${c}14`,border:isPR?'1px solid #facc1555':'1px solid transparent'}}>{isPR&&'🏆'}{ex.name}</span>; })}</div>
+        </div>
+      );})}
+    </div>
+  );
+}
+
+function Progress({ workouts, prs }){
+  const { vol, fellBack } = weeklyVolumeByMuscle(workouts);
+  const entries=Object.entries(vol).sort((a,b)=>b[1]-a[1]); const max=Math.max(1,...entries.map(e=>e[1]));
+  const tracked=useMemo(()=>{ const names=new Set(); workouts.forEach(w=>w.exercises.forEach(e=>names.add(e.name))); return [...names].filter(n=>exerciseTrend(workouts,n).length>=2).sort((a,b)=>(prs[b]?.w||0)-(prs[a]?.w||0)); },[workouts]);
+  return (
+    <div className="space-y-5">
+      <h1 className="font-display text-3xl font-800">PROGRESS</h1>
+      <div className="bg-card border border-line rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3"><div className="font-display text-lg font-700">Volume per spier</div><span className="text-[10px] uppercase tracking-widest text-slate-500 font-display">{fellBack?'all-time':'deze week'} · kg×reps</span></div>
+        <div className="space-y-3">{entries.length===0 && <div className="text-slate-500 text-sm">Nog geen volume gelogd.</div>}{entries.map(([m,v])=>{ const c=MUSCLE_COLORS[m]||'#64748b'; return (<div key={m}><div className="flex justify-between text-[12px] mb-1"><span className="font-600" style={{color:c}}>{m}</span><span className="text-slate-400 tabular-nums">{v.toLocaleString()}</span></div><div className="h-3 bg-ink rounded-full overflow-hidden"><div className="h-full rounded-full transition-all" style={{width:`${(v/max)*100}%`,background:`linear-gradient(90deg, ${c}, ${c}aa)`}}></div></div></div>); })}</div>
+      </div>
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-3">Kracht-trends</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{tracked.map(name=>{ const pts=exerciseTrend(workouts,name); const pr=prs[name]; return <Sparkline key={name} name={name} pts={pts} pr={pr}/>; })}{tracked.length===0 && <div className="text-slate-500 text-sm">Log een oefening 2× om de trend te zien.</div>}</div>
+      </div>
+    </div>
+  );
+}
+function Sparkline({ name, pts, pr }){
+  const W=240,H=56,pad=6; const ws=pts.map(p=>p.w); const min=Math.min(...ws),max=Math.max(...ws); const range=max-min||1; const stepX=pts.length>1?(W-pad*2)/(pts.length-1):0;
+  const coords=pts.map((p,i)=>[pad+i*stepX, H-pad-((p.w-min)/range)*(H-pad*2)]);
+  const path=coords.map((c,i)=>(i===0?'M':'L')+c[0].toFixed(1)+' '+c[1].toFixed(1)).join(' ');
+  const area=path+` L ${coords[coords.length-1][0].toFixed(1)} ${H-pad} L ${coords[0][0].toFixed(1)} ${H-pad} Z`;
+  const c=MUSCLE_COLORS[pr?.muscle]||'#1d9bf0'; const up=pts.length>1&&pts[pts.length-1].w>=pts[0].w; const gid='g-'+name.replace(/\W/g,'');
+  return (
+    <div className="bg-card border border-line rounded-2xl p-4">
+      <div className="flex items-start justify-between mb-2"><div className="font-600 text-sm leading-tight pr-2">{name}</div><div className="text-right shrink-0"><div className="font-display text-2xl font-800" style={{color:c}}>{pr?.w}<span className="text-xs text-slate-400">kg</span></div><div className="text-[10px] uppercase tracking-widest text-slate-500 font-display">PR · ×{pr?.r}</div></div></div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height:H}}><defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={c} stopOpacity="0.35"/><stop offset="100%" stopColor={c} stopOpacity="0"/></linearGradient></defs><path d={area} fill={`url(#${gid})`}/><path d={path} fill="none" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>{coords.map((co,i)=><circle key={i} cx={co[0]} cy={co[1]} r="2.5" fill={c}/>)}</svg>
+      <div className="flex justify-between text-[10px] text-slate-500 mt-1"><span>{fmtDate(pts[0].date)}</span><span className={up?'text-emerald-400':'text-slate-500'}>{up?'▲ stijgend':'—'}</span><span>{fmtDate(pts[pts.length-1].date)}</span></div>
+    </div>
+  );
+}
+
+function Meals({ profile, mealLog, onToggleMeal }){
+  const now=new Date(); const wk=weekKey(now); const quote=QUOTES[isoWeek(now)%QUOTES.length]; const t=computeTargets(profile.current); const log=mealLog[wk]||{};
+  const todayIdx=now.getDay()===0?6:now.getDay()-1; const [openDay,setOpenDay]=useState(todayIdx); const slots=['Breakfast','Lunch','Snack','Dinner'];
+  const totalMeals=MEALS.length*slots.length; const doneMeals=Object.values(log).reduce((n,day)=>n+slots.filter(s=>day&&day[s]).length,0);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between"><h1 className="font-display text-3xl font-800">MAALTIJDEN</h1><div className="text-right"><div className="font-display text-xl font-800 text-emerald-400">{doneMeals}/{totalMeals}</div><div className="text-[9px] uppercase tracking-widest text-slate-500 font-display">gehaald deze week</div></div></div>
+      <div className="bg-card border-l-4 border-electric rounded-xl px-4 py-2.5"><div className="text-[9px] uppercase tracking-widest text-electric2 font-display">Quote van de week</div><div className="text-sm text-slate-200 italic leading-snug mt-0.5">"{quote}"</div></div>
+      <div className="flex items-center gap-3 bg-gradient-to-br from-card to-panel border border-line rounded-xl px-4 py-2.5 glow"><div className="font-display text-2xl font-900 leading-none">{t.kcal.toLocaleString()}<span className="text-xs text-slate-400 font-700"> kcal</span></div><div className="ml-auto flex gap-4 text-right"><div><div className="font-display text-base font-800 text-electric2 leading-none">{t.protein}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">eiwit</div></div><div><div className="font-display text-base font-800 text-emerald-400 leading-none">{t.carbs}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">koolh.</div></div><div><div className="font-display text-base font-800 text-yellow-400 leading-none">{t.fat}g</div><div className="text-[8px] uppercase tracking-widest text-slate-500 font-display mt-0.5">vet</div></div></div></div>
+      <div className="space-y-1.5">{MEALS.map((d,i)=>{ const fc=FOCUS_COLOR[d.focus]||'#64748b'; const total=d.meals.reduce((a,m)=>a+m.kcal,0); const dayLog=log[i]||{}; const open=openDay===i; const isToday=i===todayIdx; return (
+        <div key={d.day} className="bg-card border border-line rounded-xl overflow-hidden" style={{borderLeft:`3px solid ${fc}`}}>
+          <div className="flex items-center gap-2 px-3 py-2"><button onClick={()=>setOpenDay(open?-1:i)} className="flex items-center gap-2 flex-1 min-w-0 text-left"><span className="font-display text-lg font-800 w-8">{d.day}</span><span className="text-[9px] font-display uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap" style={{color:fc,background:`${fc}1f`}}>{d.focus}</span>{isToday && <span className="text-[8px] font-display uppercase tracking-widest text-electric2 whitespace-nowrap">• vandaag</span>}<span className="ml-auto text-[10px] text-slate-500 tabular-nums whitespace-nowrap">{total.toLocaleString()}</span></button><div className="flex gap-1">{slots.map(s=>{ const on=!!dayLog[s]; return <button key={s} onClick={()=>onToggleMeal(wk,i,s)} title={SLOT_META[s].nl} className={`w-6 h-6 rounded-md flex items-center justify-center font-display text-[11px] font-800 transition active:scale-90 ${on?'bg-emerald-500 text-white':'bg-ink text-slate-500 border border-line'}`}>{on?'✓':SLOT_META[s].nl[0]}</button>; })}</div></div>
+          {open && <div className="px-3 pb-2.5 space-y-1.5">{d.meals.map((m,k)=>{ const meta=SLOT_META[m.slot]; const on=!!dayLog[m.slot]; return <button key={k} onClick={()=>onToggleMeal(wk,i,m.slot)} className={`w-full text-left rounded-lg px-3 py-2 border transition ${on?'bg-emerald-500/10 border-emerald-500/30':'bg-ink border-line'}`}><div className="flex items-center justify-between"><span className="font-display tracking-widest text-[9px] uppercase" style={{color:meta.color}}>{meta.icon} {meta.nl}</span><div className="flex gap-1 items-center"><span className="text-[9px] font-700 font-display px-1.5 py-0.5 rounded bg-white/5 text-slate-300">{m.kcal}</span><span className="text-[9px] font-700 font-display px-1.5 py-0.5 rounded" style={{color:'#37c0ff',background:'#1d9bf01f'}}>{m.p}g E</span>{on && <span className="text-emerald-400 text-xs">✓</span>}</div></div><div className="font-600 text-sm mt-0.5">{m.name}</div><div className="text-[11px] text-slate-400 leading-snug">{m.desc}</div></button>; })}</div>}
+        </div>
+      ); })}</div>
+    </div>
+  );
+}
+
+function Grocery({ checked, qty, onToggle, onQty, onReset }){
+  const allItems=GROCERY.flatMap(s=>s.items.map(it=>slug(it.n))); const doneCount=allItems.filter(id=>checked[id]).length;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between"><h1 className="font-display text-3xl font-800">BOODSCHAPPEN</h1><button onClick={onReset} className="text-[10px] font-display uppercase tracking-widest text-slate-400 border border-line rounded-lg px-3 py-1.5 active:scale-95">Reset</button></div>
+      <div className="flex items-center gap-3 bg-gradient-to-br from-card to-panel border border-line rounded-xl px-4 py-3 glow"><div><div className="font-display text-2xl font-900 leading-none">{doneCount}<span className="text-slate-400 text-lg">/{allItems.length}</span></div><div className="text-[9px] uppercase tracking-widest text-slate-500 font-display mt-0.5">in mandje</div></div><div className="ml-auto text-right"><div className="font-display text-2xl font-900 text-emerald-400 leading-none">≈ €110</div><div className="text-[9px] uppercase tracking-widest text-slate-500 font-display mt-0.5">budget €100–120</div></div></div>
+      {GROCERY.map(sec=>(<div key={sec.section} className="bg-card border border-line rounded-xl p-3"><div className="font-display text-sm font-800 tracking-wider uppercase text-slate-300 mb-2">{sec.icon} {sec.section}</div><div className="space-y-1">{sec.items.map(it=>{ const id=slug(it.n); const on=!!checked[id]; const q=qty[id]!==undefined?qty[id]:it.q; return (<div key={id} className="flex items-center gap-2.5"><button onClick={()=>onToggle(id)} className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition active:scale-90 ${on?'bg-emerald-500 border-emerald-400':'bg-ink border-line'}`}>{on && <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="white" strokeWidth="3"><path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round"/></svg>}</button><span className={`flex-1 text-sm ${on?'text-slate-500 line-through':'text-slate-200'}`}>{it.n}</span><input value={q} onChange={e=>onQty(id,e.target.value)} className="w-20 bg-ink border border-line focus:border-electric rounded-lg px-2 py-1 text-center text-[12px] text-slate-300 outline-none"/></div>); })}</div></div>))}
+    </div>
+  );
+}
+
+function FitnessModule({ state, setState, active, setActive, startWorkout, finishWorkout, discardWorkout, toggleMeal, toggleGrocery, setGroceryQty, resetGrocery }){
+  const [sub,setSub]=useState('home');
+  const prs=useMemo(()=>computePRs(state.workouts),[state.workouts]);
+  const setProfile=(p)=>setState(s=>({...s,profile:p}));
+  const startAndGo=(d)=>{ startWorkout(d); setSub('workout'); };
+  const tabs=[['home','Home'],['workout','Workout'],['meals','Eten'],['shop','Shop'],['history','History'],['progress','Trends']];
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
+        {tabs.map(([id,l])=><button key={id} onClick={()=>setSub(id)} className={`whitespace-nowrap rounded-full px-3.5 py-1.5 text-[11px] font-display uppercase tracking-widest font-700 transition ${sub===id?'bg-electric text-white':'bg-card border border-line text-slate-400'}`}>{l}{id==='workout'&&active?' •':''}</button>)}
+      </div>
+      {sub==='home' && <FitDashboard workouts={state.workouts} prs={prs} profile={state.profile} setProfile={setProfile} onStart={startAndGo}/>}
+      {sub==='workout' && <WorkoutScreen active={active} setActive={setActive} workouts={state.workouts} onFinish={(e)=>{ finishWorkout(e); setSub('history'); }} onDiscard={()=>{ discardWorkout(); setSub('home'); }} onStartPick={startAndGo}/>}
+      {sub==='meals' && <Meals profile={state.profile} mealLog={state.mealLog||{}} onToggleMeal={toggleMeal}/>}
+      {sub==='shop' && <Grocery checked={state.groceryChecked||{}} qty={state.groceryQty||{}} onToggle={toggleGrocery} onQty={setGroceryQty} onReset={resetGrocery}/>}
+      {sub==='history' && <History workouts={state.workouts}/>}
+      {sub==='progress' && <Progress workouts={state.workouts} prs={prs}/>}
+    </div>
+  );
+}
+
+/* =========================================================================
+   BOTTOM NAV
+   ========================================================================= */
+function Nav({ tab, setTab, activeBadge }){
+  const items=[
+    { id:'doelen', label:'Doelen', icon:'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7a5 5 0 100 10 5 5 0 000-10zM12 11a1 1 0 100 2 1 1 0 000-2z' },
+    { id:'vandaag', label:'Vandaag', icon:'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11' },
+    { id:'lichaam', label:'Lichaam', icon:'M12 2a2 2 0 100 4 2 2 0 000-4zM5 8h14M12 6v6m0 0l-3 8m3-8l3 8' },
+    { id:'fitness', label:'Fitness', icon:'M6.5 6.5l11 11M4 8l-1 1 3 3M20 16l1-1-3-3M8 4l-1 1 3 3M16 20l1-1-3-3' },
+  ];
+  return (
+    <div className="fixed bottom-0 inset-x-0 z-30 bg-panel/95 backdrop-blur border-t border-line">
+      <div className="max-w-xl mx-auto grid grid-cols-4">
+        {items.map(it=>{ const on=tab===it.id; return (
+          <button key={it.id} onClick={()=>setTab(it.id)} className="relative py-2.5 flex flex-col items-center gap-1">
+            <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke={on?'#37c0ff':'#64748b'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={it.icon}/></svg>
+            <span className="font-display tracking-widest text-[10px] uppercase" style={{color:on?'#37c0ff':'#64748b'}}>{it.label}</span>
+            {it.id==='fitness' && activeBadge && <span className="absolute top-1.5 right-1/4 w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+          </button>
+        ); })}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
+   CLOUD SYNC
+   ========================================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyAKYYa784BakDWscIEsyvxsFqCQNVeb7mE",
+  authDomain: "justin-s-fitness-tracker.firebaseapp.com",
+  projectId: "justin-s-fitness-tracker",
+  storageBucket: "justin-s-fitness-tracker.firebasestorage.app",
+  messagingSenderId: "716496859067",
+  appId: "1:716496859067:web:32ca055cb1f005efd41e9e"
+};
+const SYNC_DOC = 'justin-main'; // same doc as the fitness tracker → workout history carries over
+
+/* =========================================================================
+   APP
+   ========================================================================= */
+function App(){
+  const [state,setState]=useState(loadState);
+  const [tab,setTab]=useState('doelen');
+  const [active,setActive]=useState(null);
+  const [sync,setSync]=useState('connecting');
+  const stateRef=useRef(state); stateRef.current=state;
+  const docRef=useRef(null); const applyingRemote=useRef(false);
+
+  useEffect(()=>{
+    try {
+      if (!window.firebase || !firebase.firestore){ setSync('offline'); return; }
+      if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+      const db=firebase.firestore();
+      docRef.current=db.collection('trackers').doc(SYNC_DOC);
+      const unsub=docRef.current.onSnapshot((snap)=>{
+        if (snap.exists && snap.data() && snap.data().payload){
+          try { const remote=mergeState(loadState(), JSON.parse(snap.data().payload)); applyingRemote.current=true; setState(remote); } catch(e){}
+          setSync('synced');
+        } else { docRef.current.set({ payload:JSON.stringify(stateRef.current), updated:Date.now() }).catch(()=>{}); setSync('synced'); }
+      },(err)=>{ console.warn('sync error',err); setSync('offline'); });
+      return ()=>unsub();
+    } catch(e){ setSync('offline'); }
+  },[]);
+
+  useEffect(()=>{
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+    if (applyingRemote.current){ applyingRemote.current=false; return; }
+    if (docRef.current) docRef.current.set({ payload:JSON.stringify(state), updated:Date.now() }).catch(()=>{});
+  },[state]);
+
+  /* goals */
+  const addGoal=(g)=>setState(s=>({ ...s, goals:[...s.goals, g] }));
+  const deleteGoal=(id)=>setState(s=>({ ...s, goals:s.goals.filter(g=>g.id!==id) }));
+  /* day log */
+  const setDayValue=(goalId,val)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day[goalId]=val; dl[d]=day; return {...s,dayLog:dl}; });
+  const toggleDay=(goalId)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day[goalId]=!day[goalId]; dl[d]=day; return {...s,dayLog:dl}; });
+  /* month log */
+  const addMonth=(goalId,amount)=>setState(s=>{ const mk=monthKey(todayISO()); const ml={...(s.monthLog||{})}; const mo={...(ml[mk]||{})}; mo[goalId]=(Number(mo[goalId])||0)+amount; ml[mk]=mo; return {...s,monthLog:ml}; });
+  /* metrics */
+  const saveMetric=(date,key,val)=>setState(s=>{ const me={...(s.metrics||{})}; const e={...(me[date]||{})}; e[key]=val; me[date]=e; const np = key==='weight' && val!=='' ? {...s.profile, current:Number(val)} : s.profile; return {...s,metrics:me,profile:np}; });
+  const setMood=(date,key,val)=>setState(s=>{ const me={...(s.metrics||{})}; const e={...(me[date]||{})}; e[key]=val; me[date]=e; return {...s,metrics:me}; });
+
+  /* fitness handlers */
+  const startWorkout=(day)=>{ setActive({ planId:day.id, name:day.name, date:todayISO(), startTime:Date.now(), exercises:day.exercises.map(e=>({ name:e.name, muscle:e.muscle, sets:Array.from({length:e.sets},()=>({w:'',r:'',done:false})) })) }); };
+  const finishWorkout=(elapsed)=>{ const cleaned=active.exercises.map(e=>({name:e.name,muscle:e.muscle,sets:e.sets.filter(s=>(Number(s.r)||0)>0).map(s=>({w:Number(s.w)||0,r:Number(s.r)||0}))})).filter(e=>e.sets.length>0); if(cleaned.length===0){ setActive(null); return; } const nw={ id:Date.now(), planId:active.planId, name:active.name, date:active.date, durationSec:elapsed, exercises:cleaned }; setState(s=>({...s,workouts:[...s.workouts,nw]})); setActive(null); };
+  const discardWorkout=()=>setActive(null);
+  const toggleMeal=(wk,di,slot)=>setState(s=>{ const ml={...(s.mealLog||{})}; const week={...(ml[wk]||{})}; const day={...(week[di]||{})}; day[slot]=!day[slot]; week[di]=day; ml[wk]=week; return {...s,mealLog:ml}; });
+  const toggleGrocery=(id)=>setState(s=>({...s,groceryChecked:{...(s.groceryChecked||{}),[id]:!(s.groceryChecked||{})[id]}}));
+  const setGroceryQty=(id,val)=>setState(s=>({...s,groceryQty:{...(s.groceryQty||{}),[id]:val}}));
+  const resetGrocery=()=>setState(s=>({...s,groceryChecked:{}}));
+
+  const syncStyle = sync==='synced'?{color:'#34d399',background:'#34d39915',borderColor:'#34d39940'}:sync==='offline'?{color:'#facc15',background:'#facc1515',borderColor:'#facc1540'}:{color:'#37c0ff',background:'#1d9bf015',borderColor:'#1d9bf040'};
+  return (
+    <div className="min-h-screen text-slate-100 max-w-xl mx-auto px-4 pt-5 pb-28">
+      <div className="fixed top-2 right-2 z-50 text-[9px] font-display uppercase tracking-widest px-2 py-1 rounded-full border" style={syncStyle}>{sync==='synced'?'☁ synced':sync==='offline'?'⚠ offline':'… syncing'}</div>
+      {tab==='doelen' && <GoalsScreen state={state} onAddGoal={addGoal} onDeleteGoal={deleteGoal} goTo={setTab}/>}
+      {tab==='vandaag' && <TodayScreen state={state} setDayValue={setDayValue} toggleDay={toggleDay} addMonth={addMonth} goTo={setTab}/>}
+      {tab==='lichaam' && <BodyScreen state={state} saveMetric={saveMetric} setMood={setMood}/>}
+      {tab==='fitness' && <FitnessModule state={state} setState={setState} active={active} setActive={setActive} startWorkout={startWorkout} finishWorkout={finishWorkout} discardWorkout={discardWorkout} toggleMeal={toggleMeal} toggleGrocery={toggleGrocery} setGroceryQty={setGroceryQty} resetGrocery={resetGrocery}/>}
+      <Nav tab={tab} setTab={setTab} activeBadge={!!active}/>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
