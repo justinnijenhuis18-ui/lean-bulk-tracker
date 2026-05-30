@@ -314,6 +314,11 @@ function isDayPerfect(state, date){ if(isFreeDay(state,date)) return false; cons
 function lifestyleStreak(state){ let d=new Date(); const t=todayISO(); if(!isDayPerfect(state,t) && !isFreeDay(state,t)) d.setDate(d.getDate()-1); let n=0; for(let i=0;i<1000;i++){ const iso=d.toISOString().slice(0,10); if(isDayPerfect(state,iso)){ n++; d.setDate(d.getDate()-1); } else if(isFreeDay(state,iso)){ d.setDate(d.getDate()-1); } else break; } return n; }
 function todayLifestyle(state){ const t=todayISO(); const dg=dailyGoalsList(state); const reqs=dg.map(g=>dailyGoalMetOn(g,state,t)).concat([isDayClean(state,t)]); const met=reqs.filter(Boolean).length; return { met, total:reqs.length, perfect:met===reqs.length && reqs.length>0, free:isFreeDay(state,t) }; }
 
+/* --- weekly dashboard --- */
+function dayConsistency(state, date){ const dg=dailyGoalsList(state); if(!dg.length) return 0; const day=state.dayLog[date]||{}; const ps=dg.map(g=>{ const v=g.metric==='count'?(day[g.id]?1:0):(Number(day[g.id])||0); return Math.min(1, g.target? v/g.target:0); }); return ps.reduce((a,b)=>a+b,0)/ps.length; }
+function weekConsistency(state, weekStart){ const t=todayISO(); let sum=0,n=0; for(let i=0;i<7;i++){ const d=new Date(weekStart); d.setDate(d.getDate()+i); const iso=d.toISOString().slice(0,10); if(iso>t) break; sum+=dayConsistency(state,iso); n++; } return n? sum/n : 0; }
+function listWeeks(state){ const cur=startOfWeek(new Date()); const keys=Object.keys(state.dayLog||{}).filter(k=>/^\d{4}-\d{2}-\d{2}$/.test(k)).sort(); const earliest=keys.length? startOfWeek(new Date(keys[0]+'T00:00:00')) : cur; const out=[]; let w=new Date(cur); for(let i=0;i<53;i++){ out.push(new Date(w)); if(w.getTime()<=earliest.getTime()) break; w.setDate(w.getDate()-7); } return out; }
+
 /* =========================================================================
    UI ATOMS
    ========================================================================= */
@@ -528,7 +533,7 @@ function GoalSheet({ area, onClose, onSave }){
 /* =========================================================================
    VANDAAG
    ========================================================================= */
-function TodayScreen({ state, setDayValue, toggleDay, addMonth, toggleClean, toggleFreeDay, goTo }){
+function TodayScreen({ state, setDayValue, toggleDay, addMonth, toggleClean, toggleFreeDay, addWater, goTo }){
   const today = todayISO();
   const dayLog = state.dayLog[today] || {};
   const dailyGoals = state.goals.filter(g=>g.cadence==='daily');
@@ -545,16 +550,27 @@ function TodayScreen({ state, setDayValue, toggleDay, addMonth, toggleClean, tog
 
   return (
     <div className="space-y-5">
-      {/* consistency ring */}
-      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow flex items-center gap-5">
-        <Ring pct={consistency} size={104} stroke={11} color={consistency>=1?'#34d399':'#37c0ff'}>
-          <div className="font-display text-3xl font-900 leading-none">{Math.round(consistency*100)}<span className="text-base">%</span></div>
-          <div className="text-[8px] uppercase tracking-widest text-slate-400 font-display mt-0.5">consistentie</div>
-        </Ring>
-        <div className="min-w-0">
-          <div className="font-display tracking-widest text-electric2 text-xs uppercase">{fmtDate(today)}</div>
-          <h1 className="font-display text-3xl font-900 leading-tight mt-0.5">VANDAAG</h1>
-          <div className="text-sm text-slate-400 mt-1">{doneCount}/{dailyGoals.length} dagdoelen gehaald</div>
+      {/* header: greeting + date + big dagscore ring + streak cards */}
+      <div className="bg-gradient-to-br from-card to-panel border border-line rounded-2xl p-5 glow">
+        <div className="text-center">
+          <div className="font-display tracking-widest text-electric2 text-sm uppercase">{(()=>{ const h=new Date().getHours(); return h<6?'Goedenacht':h<12?'Goedemorgen':h<18?'Goedemiddag':'Goedenavond'; })()}, Justin</div>
+          <div className="text-[11px] text-slate-500 font-display uppercase tracking-widest mt-0.5">{fmtDate(today)}</div>
+        </div>
+        <div className="flex justify-center my-4">
+          <Ring pct={consistency} size={158} stroke={13} color={consistency>=1?'#34d399':'#37c0ff'}>
+            <div className="font-display text-5xl font-900 leading-none">{Math.round(consistency*100)}<span className="text-xl">%</span></div>
+            <div className="text-[9px] uppercase tracking-widest text-slate-400 font-display mt-1">compleet · {doneCount}/{dailyGoals.length}</div>
+          </Ring>
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1 bg-ink/60 border border-line rounded-xl p-3 flex items-center gap-3" style={{borderLeft:'3px solid #f59e0b'}}>
+            <span className="text-2xl">🔥</span>
+            <div><div className="font-display text-2xl font-900 leading-none">{lifestyleStreak(state)}</div><div className="text-[9px] uppercase tracking-widest text-slate-500 font-display">Lifestyle streak</div></div>
+          </div>
+          <div className="flex-1 bg-ink/60 border border-line rounded-xl p-3 flex items-center gap-3" style={{borderLeft:'3px solid #a78bfa'}}>
+            <span className="text-2xl">🧼</span>
+            <div><div className="font-display text-2xl font-900 leading-none">{cleanStreak(state)}</div><div className="text-[9px] uppercase tracking-widest text-slate-500 font-display">Clean streak</div></div>
+          </div>
         </div>
       </div>
 
@@ -597,6 +613,27 @@ function TodayScreen({ state, setDayValue, toggleDay, addMonth, toggleClean, tog
         <div className="space-y-2">
           {dailyGoals.map(g=>{
             const c = goalColor(g);
+            if (g.id==='water'){
+              const cur = Number(dayLog.water)||0; const pct = Math.min(1, g.target? cur/g.target:0); const hit = cur>=g.target; const glasses = Math.round(cur/0.25);
+              const lbl = (Math.round(cur*100)/100).toString().replace('.',',');
+              return (
+                <div key={g.id} className={`rounded-2xl p-3.5 border ${hit?'bg-emerald-500/10 border-emerald-500/40':'bg-card border-line'}`}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">💧</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-700">Water <span className="text-slate-500 text-sm font-400">· {lbl} / 3 L</span></div>
+                      <div className="h-1.5 bg-ink rounded-full overflow-hidden mt-1.5"><div className="h-full rounded-full" style={{width:`${pct*100}%`,background:hit?'#34d399':c}}></div></div>
+                    </div>
+                    <div className="text-right text-[11px] text-slate-500 leading-tight">{glasses}<br/>glazen</div>
+                  </div>
+                  <div className="flex gap-2 mt-2.5">
+                    <button onClick={()=>addWater(0.25)} className="flex-1 bg-ink border border-line rounded-lg py-2 text-sm font-display font-700 text-slate-200 active:scale-95">+ Glas <span className="text-slate-500">250ml</span></button>
+                    <button onClick={()=>addWater(0.5)} className="flex-1 bg-electric/10 border border-electric/40 rounded-lg py-2 text-sm font-display font-700 text-electric2 active:scale-95">+ XXL-fles <span className="opacity-70">500ml</span></button>
+                    <button onClick={()=>addWater(-0.25)} aria-label="ongedaan maken" className="w-11 bg-ink border border-line rounded-lg py-2 text-base font-display font-700 text-slate-500 active:scale-95">−</button>
+                  </div>
+                </div>
+              );
+            }
             if (g.metric==='count'){
               const on = !!dayLog[g.id];
               return (
@@ -1018,18 +1055,56 @@ function FitnessModule({ state, setState, active, setActive, startWorkout, finis
 }
 
 /* =========================================================================
+   WEKEN (weekly dashboard)
+   ========================================================================= */
+function WeeksScreen({ state }){
+  const cur = startOfWeek(new Date());
+  const weeks = listWeeks(state).map(start=>{ const score=weekConsistency(state,start); const isCurrent=start.getTime()===cur.getTime(); return { start, score, isCurrent, status: isCurrent?'bezig':(score>=0.8?'voltooid':'gemist') }; });
+  const voltooid = weeks.filter(w=>w.status==='voltooid').length;
+  const current = weeks.find(w=>w.isCurrent);
+  const f=(d)=>d.toLocaleDateString('nl-NL',{day:'numeric',month:'short'});
+  const range=(s)=>{ const e=new Date(s); e.setDate(e.getDate()+6); return `${f(s)} – ${f(e)}`; };
+  return (
+    <div className="space-y-5">
+      <h1 className="font-display text-3xl font-900">WEKEN</h1>
+      <div className="flex gap-3">
+        <StatBox label="Voltooid" value={voltooid} sub="weken ≥80%" accent="#34d399" />
+        <StatBox label="Deze week" value={`${Math.round((current?current.score:0)*100)}%`} sub="loopt nog" accent="#37c0ff" />
+        <StatBox label="Gevolgd" value={weeks.length} sub="weken" />
+      </div>
+      <div>
+        <div className="font-display tracking-widest text-slate-400 text-xs uppercase mb-2.5">Per week</div>
+        <div className="space-y-2">
+          {weeks.map((w,i)=>{ const pct=Math.round(w.score*100); const col=w.status==='voltooid'?'#34d399':w.status==='bezig'?'#37c0ff':'#64748b'; const lab=w.status==='voltooid'?'Voltooid':w.status==='bezig'?'Bezig':'Gemist'; return (
+            <div key={i} className="flex items-center gap-3 bg-card border border-line rounded-2xl p-3.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between text-[13px] mb-1.5"><span className="font-700">{range(w.start)}</span><span style={{color:col}} className="font-display font-700">{pct}%</span></div>
+                <div className="h-1.5 bg-ink rounded-full overflow-hidden"><div className="h-full rounded-full" style={{width:`${pct}%`,background:col}}></div></div>
+              </div>
+              <span className="text-[10px] font-display uppercase tracking-widest px-2 py-1 rounded-lg" style={{color:col,background:`${col}1f`}}>{lab}</span>
+            </div>
+          ); })}
+        </div>
+        <div className="text-[10px] text-slate-500 text-center px-6 mt-3">Een week telt als 'voltooid' bij gemiddeld ≥80% van je dagdoelen. Vult zich vanzelf naarmate je dagelijks bijhoudt.</div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================================
    BOTTOM NAV
    ========================================================================= */
 function Nav({ tab, setTab, activeBadge }){
   const items=[
     { id:'doelen', label:'Doelen', icon:'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7a5 5 0 100 10 5 5 0 000-10zM12 11a1 1 0 100 2 1 1 0 000-2z' },
     { id:'vandaag', label:'Vandaag', icon:'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11' },
+    { id:'weken', label:'Weken', icon:'M4 20V4M4 20h16M9 16V9M14 16v-4M19 16V7' },
     { id:'lichaam', label:'Lichaam', icon:'M12 2a2 2 0 100 4 2 2 0 000-4zM5 8h14M12 6v6m0 0l-3 8m3-8l3 8' },
     { id:'fitness', label:'Fitness', icon:'M6.5 6.5l11 11M4 8l-1 1 3 3M20 16l1-1-3-3M8 4l-1 1 3 3M16 20l1-1-3-3' },
   ];
   return (
     <div className="fixed bottom-0 inset-x-0 z-30 bg-panel/95 backdrop-blur border-t border-line">
-      <div className="max-w-xl mx-auto grid grid-cols-4">
+      <div className="max-w-xl mx-auto grid grid-cols-5">
         {items.map(it=>{ const on=tab===it.id; return (
           <button key={it.id} onClick={()=>setTab(it.id)} className="relative py-2.5 flex flex-col items-center gap-1">
             <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none" stroke={on?'#37c0ff':'#64748b'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={it.icon}/></svg>
@@ -1096,6 +1171,7 @@ function App(){
   const toggleDay=(goalId)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day[goalId]=!day[goalId]; dl[d]=day; return {...s,dayLog:dl}; });
   const toggleClean=(key)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; const clean={...(day.clean||{})}; clean[key]=!clean[key]; day.clean=clean; dl[d]=day; return {...s,dayLog:dl}; });
   const toggleFreeDay=()=>setState(s=>{ const d=todayISO(); const cur=isFreeDay(s,d); if(!cur && weekFreeCount(s)>=FREE_DAYS_PER_WEEK) return s; const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; day.freeDay=!cur; dl[d]=day; return {...s,dayLog:dl}; });
+  const addWater=(amount)=>setState(s=>{ const d=todayISO(); const dl={...(s.dayLog||{})}; const day={...(dl[d]||{})}; const cur=Number(day.water)||0; day.water=Math.max(0, Math.round((cur+amount)*100)/100); dl[d]=day; return {...s,dayLog:dl}; });
   /* month log */
   const addMonth=(goalId,amount)=>setState(s=>{ const mk=monthKey(todayISO()); const ml={...(s.monthLog||{})}; const mo={...(ml[mk]||{})}; mo[goalId]=(Number(mo[goalId])||0)+amount; ml[mk]=mo; return {...s,monthLog:ml}; });
   /* metrics */
@@ -1116,7 +1192,8 @@ function App(){
     <div className="min-h-screen text-slate-100 max-w-xl mx-auto px-4 pt-5 pb-28">
       <div className="fixed top-2 right-2 z-50 text-[9px] font-display uppercase tracking-widest px-2 py-1 rounded-full border" style={syncStyle}>{sync==='synced'?'☁ synced':sync==='offline'?'⚠ offline':'… syncing'}</div>
       {tab==='doelen' && <GoalsScreen state={state} onAddGoal={addGoal} onDeleteGoal={deleteGoal} goTo={setTab}/>}
-      {tab==='vandaag' && <TodayScreen state={state} setDayValue={setDayValue} toggleDay={toggleDay} addMonth={addMonth} toggleClean={toggleClean} toggleFreeDay={toggleFreeDay} goTo={setTab}/>}
+      {tab==='vandaag' && <TodayScreen state={state} setDayValue={setDayValue} toggleDay={toggleDay} addMonth={addMonth} toggleClean={toggleClean} toggleFreeDay={toggleFreeDay} addWater={addWater} goTo={setTab}/>}
+      {tab==='weken' && <WeeksScreen state={state}/>}
       {tab==='lichaam' && <BodyScreen state={state} saveMetric={saveMetric} setMood={setMood}/>}
       {tab==='fitness' && <FitnessModule state={state} setState={setState} active={active} setActive={setActive} startWorkout={startWorkout} finishWorkout={finishWorkout} discardWorkout={discardWorkout} toggleMeal={toggleMeal} toggleGrocery={toggleGrocery} setGroceryQty={setGroceryQty} resetGrocery={resetGrocery}/>}
       <Nav tab={tab} setTab={setTab} activeBadge={!!active}/>
